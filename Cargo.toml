@@ -1,0 +1,39 @@
+[package]
+name = "jenv-rs"
+version = "0.1.0"
+edition = "2024"
+description = "jenv reimplemented in Rust, with native Windows support and local JDK registration"
+license = "MIT"
+repository = "https://github.com/zuisong/jenv-rs"
+homepage = "https://github.com/zuisong/jenv-rs"
+readme = "README.md"
+keywords = ["java", "jdk", "jenv", "version-manager", "sdkman"]
+categories = ["command-line-utilities", "development-tools"]
+
+[lib]
+name = "jenv"
+path = "src/lib.rs"
+
+[[bin]]
+name = "jenv"
+path = "src/bin/jenv.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
+
+# Rust sets SIGPIPE to SIG_IGN, which turns `jenv version-name | head -1` into
+# a panic instead of the quiet exit every other Unix tool does.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# Only used to keep CTRL_C from killing the shim before the real tool
+# finishes. Unix replaces the process outright and needs none of this.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console"] }
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+panic = "abort"

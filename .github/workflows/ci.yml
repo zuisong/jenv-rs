@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  lint:
+    name: fmt + clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets --locked
+
+  test:
+    name: ${{ matrix.os }} / ${{ matrix.rust }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        rust: [stable, nightly]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.rust }}
+
+      - name: Build
+        run: cargo build --locked --verbose
+
+      # The suite's fixture is a fake JDK made of `#!/bin/sh` scripts, which
+      # Windows will not execute. The Windows signal is the build plus this:
+      # enough of the CLI to prove the binary runs and lays out $JENV_ROOT.
+      - name: Test
+        if: runner.os != 'Windows'
+        run: cargo test --locked --verbose
+
+      - name: Smoke test
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          # Without this the CLI would lay itself out under $HOME/.jenv and
+          # the run would depend on whatever the image happens to have.
+          JENV_ROOT: ${{ runner.temp }}\jenv-root
+        run: |
+          $jenv = ".\target\debug\jenv.exe"
+          $root = $env:JENV_ROOT
+
+          & $jenv init - --no-rehash powershell | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "init failed" }
+          if (-not (Test-Path (Join-Path $root "shims"))) { throw "no shims dir" }
+          if (-not (Test-Path (Join-Path $root "versions"))) { throw "no versions dir" }
+
+          if ((& $jenv root) -ne $root) { throw "root is not JENV_ROOT" }
+          & $jenv versions | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "versions failed" }
+          & $jenv doctor | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "doctor found problems" }
+          Write-Host "windows smoke test passed"
