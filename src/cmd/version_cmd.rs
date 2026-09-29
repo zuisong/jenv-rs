@@ -89,8 +89,12 @@ pub fn prefix(layout: &Layout, requested: Option<String>) -> Result<(), String> 
     };
 
     if name == "system" {
-        // The system java's home is wherever `which java` points, minus /bin.
-        let java = crate::cmd::which::resolve(layout, "java")?;
+        // The system java's home is wherever `java` points on the ambient
+        // PATH, minus /bin. Asking `which::resolve` would consult the selected
+        // version first and answer with that instead, which is the opposite of
+        // what `system` means.
+        let java = crate::cmd::which::resolve_system(layout, "java")
+            .ok_or_else(|| "jenv: no system java on PATH".to_string())?;
         let Some(bin) = java.parent() else {
             return Err("jenv: could not derive a prefix from the system java".into());
         };

@@ -4,10 +4,20 @@ use crate::proc;
 use crate::version;
 use std::path::PathBuf;
 
+/// Where `command` resolves on the ambient `PATH`, with the shims directory
+/// removed so a shim cannot resolve itself.
+///
+/// This deliberately ignores the selected version. Anything answering "what
+/// would the system JDK do" has to ask the system, and `resolve` would
+/// otherwise hand back the selected version's `bin/`.
+pub fn resolve_system(layout: &Layout, command: &str) -> Option<PathBuf> {
+    let dirs = proc::path_without(&layout.shims_dir(), &proc::path_dirs());
+    proc::which_in_path(command, &dirs)
+}
+
 /// Is there a java reachable without going through jenv's shims?
 pub fn has_system_java(layout: &Layout) -> bool {
-    let dirs = proc::path_without(&layout.shims_dir(), &proc::path_dirs());
-    proc::which_in_path("java", &dirs).is_some()
+    resolve_system(layout, "java").is_some()
 }
 
 /// Where `command` resolves for the active version.

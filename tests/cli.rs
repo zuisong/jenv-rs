@@ -66,6 +66,13 @@ impl Sandbox {
         self.root.join("shims")
     }
 
+    /// A `java` on the sandbox's own `PATH` that no jenv version provides, so
+    /// "the system JDK" is something a test can name. Its home is `$JENV_ROOT`,
+    /// because it sits in `$JENV_ROOT/bin`.
+    fn install_system_java(&self) {
+        write_script(&self.root.join("bin").join("java"), "echo system java");
+    }
+
     /// Where `name` is registered, as `jenv prefix` and `jenv which` report it.
     fn registered(&self, name: &str) -> PathBuf {
         self.root.join("versions").join(name)
@@ -581,6 +588,101 @@ fn an_uninstalled_version_is_an_error_not_a_silent_fallback() {
         .output();
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("is not installed"));
+}
+
+#[test]
+fn system_is_a_version_you_can_select_wherever_versions_are_written() {
+    let sandbox = Sandbox::new("select-system");
+    // `system` is not a registration, so it has to be admitted by every
+    // writer — `jenv shell system` accepts it, and the other two used to
+    // disagree with it.
+    sandbox.run(&["global", "system"]).succeeds();
+    assert_eq!(
+        std::fs::read_to_string(sandbox.root.join("version")).unwrap(),
+        "system\n"
+    );
+
+    sandbox.run(&["local", "system"]).succeeds();
+    assert_eq!(
+        std::fs::read_to_string(sandbox.project().join(".java-version")).unwrap(),
+        "system\n"
+    );
+
+    // And a name that is neither registered nor `system` is still refused.
+    sandbox.run(&["global", "99"]).fails();
+    sandbox.run(&["local", "99"]).fails();
+}
+
+#[test]
+fn the_powershell_hook_and_shell_line_use_powershell_syntax() {
+    let sandbox = Sandbox::new("powershell-dialect");
+    write_script(&sandbox.jdk.join("bin").join("javac"), "echo javac");
+    sandbox
+        .run(&["add", &sandbox.jdk.display().to_string()])
+        .succeeds();
+    sandbox.run(&["local", "21"]).succeeds();
+
+    // PowerShell has no `export` and no `unset`, and this text is handed to
+    // Invoke-Expression, so POSIX syntax throws on every single prompt.
+    let hook = sandbox.spawn_text_with(&[("JENV_SHELL", "powershell")], &["export-hook"]);
+    assert!(!hook.contains("export "), "{hook}");
+    assert!(!hook.contains("unset "), "{hook}");
+    assert!(hook.contains("$env:JAVA_HOME = "), "{hook}");
+
+    let shell_line = sandbox.spawn_text_with(&[("JENV_SHELL", "powershell")], &["shell", "21"]);
+    assert_eq!(shell_line.trim(), "$env:JENV_VERSION = \"21\"");
+
+    // Clearing is a cmdlet in PowerShell, not a keyword. The hook only speaks
+    // when the environment disagrees, so there has to be something to clear.
+    sandbox.run(&["local", "--unset"]).succeeds();
+    let cleared = sandbox.spawn_text_with(
+        &[
+            ("JENV_SHELL", "powershell"),
+            ("JAVA_HOME", "/stale/jdk"),
+            ("JDK_HOME", "/stale/jdk"),
+        ],
+        &["export-hook"],
+    );
+    assert!(cleared.contains("Remove-Item Env:JAVA_HOME"), "{cleared}");
+    assert!(cleared.contains("Remove-Item Env:JDK_HOME"), "{cleared}");
+}
+
+#[test]
+fn prefix_system_ignores_which_version_is_selected() {
+    let sandbox = Sandbox::new("prefix-system");
+    sandbox
+        .run(&["add", &sandbox.jdk.display().to_string()])
+        .succeeds();
+    sandbox.run(&["local", "21"]).succeeds();
+
+    sandbox.install_system_java();
+
+    // `system` asks what the JDK on PATH would be. It must not be answered out
+    // of the selected version's bin/, which is what a plain `which java` does
+    // while 21 is selected.
+    sandbox
+        .run(&["prefix", "system"])
+        .succeeds()
+        .stdout_is(sandbox.root.display().to_string().as_str());
+
+    // And the selection is still what plain `prefix` reports.
+    sandbox
+        .run(&["prefix"])
+        .succeeds()
+        .stdout_is(sandbox.registered("21").display().to_string().as_str());
+}
+
+#[test]
+fn the_powershell_init_names_the_binary_that_exists_on_this_platform() {
+    let sandbox = Sandbox::new("powershell-exe");
+    // `jenv init - powershell` also works where pwsh runs on macOS or Linux,
+    // and there the installed binary is `jenv`, not `jenv.exe`.
+    let code = sandbox.run(&["init", "-", "powershell"]).succeeds();
+    let expected = format!("jenv{}", std::env::consts::EXE_SUFFIX);
+    assert!(code.stdout.contains(&expected), "{}", code.stdout);
+    if std::env::consts::EXE_SUFFIX.is_empty() {
+        assert!(!code.stdout.contains("jenv.exe"), "{}", code.stdout);
+    }
 }
 
 #[test]

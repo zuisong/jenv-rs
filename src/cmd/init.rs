@@ -185,6 +185,10 @@ end
 
 fn powershell_code(shims: &Path, export_home: bool) -> String {
     let shims = shims.display();
+    // PowerShell is not only a Windows shell: `jenv init - powershell` works
+    // wherever pwsh is installed, and the binary there is `jenv`, not
+    // `jenv.exe`. Naming the wrong one makes every hook call fail.
+    let exe = format!("jenv{}", std::env::consts::EXE_SUFFIX);
     let mut code = format!(
         r#"$env:PATH = "{shims};$env:PATH"
 $env:JENV_SHELL = "powershell"
@@ -201,10 +205,10 @@ if (-not (Test-Path function:__jenv_original_prompt)) {
     Copy-Item function:prompt function:__jenv_original_prompt
 }
 function global:prompt {
-    jenv.exe export-hook | Invoke-Expression
+    __JENV_EXE__ export-hook | Invoke-Expression
     __jenv_original_prompt
 }
-jenv.exe export-hook | Invoke-Expression
+__JENV_EXE__ export-hook | Invoke-Expression
 "#,
         );
     } else {
@@ -220,13 +224,14 @@ function global:jenv {
   if ($args.Count -gt 0 -and $args[0] -eq "shell") {
     $rest = @()
     if ($args.Count -gt 1) { $rest = $args[1..($args.Count - 1)] }
-    Invoke-Expression ((jenv.exe shell @rest) | Out-String)
+    Invoke-Expression ((__JENV_EXE__ shell @rest) | Out-String)
   } else {
-    & jenv.exe @args
+    & __JENV_EXE__ @args
   }
 }
 "#,
     );
+    code = code.replace("__JENV_EXE__", &exe);
     code
 }
 

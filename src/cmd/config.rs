@@ -100,6 +100,9 @@ pub fn shell(layout: &Layout, requested: Option<String>, unset: bool) -> Result<
         "{}",
         match shell.as_str() {
             "fish" => format!("set -gx JENV_VERSION \"{requested}\""),
+            // PowerShell has no `export`; this line goes straight into
+            // Invoke-Expression, so POSIX syntax would throw on every use.
+            "powershell" => format!("$env:JENV_VERSION = \"{requested}\""),
             _ => format!("export JENV_VERSION=\"{requested}\""),
         }
     );
@@ -109,8 +112,10 @@ pub fn shell(layout: &Layout, requested: Option<String>, unset: bool) -> Result<
 fn write_version_file(layout: &Layout, file: &Path, requested: &str) -> Result<(), String> {
     // Check the name is real, but print nothing: `jenv local 21` is quiet on
     // success, and the prefix it validates against is not what the user asked
-    // to see.
-    if link::home_of(layout, requested).is_none() {
+    // to see. `link::exists`, not `home_of`: `system` is a version you select
+    // rather than one that is registered, and jenv treats it as first-class —
+    // `jenv global system` and `jenv shell system` have to agree.
+    if !link::exists(layout, requested) {
         return Err(format!("jenv: version `{requested}' not installed"));
     }
     if let Some(parent) = file.parent() {
@@ -122,11 +127,7 @@ fn write_version_file(layout: &Layout, file: &Path, requested: &str) -> Result<(
 /// `jenv options [--verbose]` — the extra arguments prepended to every run.
 pub fn options(layout: &Layout, verbose: bool) {
     if let Some(from_env) = std::env::var("JENV_OPTIONS").ok().filter(|v| !v.is_empty()) {
-        return print_options(
-            &from_env,
-            "JENV_VERSION_OPTIONS environment variable",
-            verbose,
-        );
+        return print_options(&from_env, "JENV_OPTIONS environment variable", verbose);
     }
 
     let file = options_file(layout);

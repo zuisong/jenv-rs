@@ -86,14 +86,18 @@ fn render(shell: &str, var: &str, value: Option<&str>) -> Option<String> {
             Some(value) => format!("set -gx {var} \"{value}\"\n"),
             None => format!("set -e {var}\n"),
         },
+        // PowerShell has no `export` and no `unset`; both would raise
+        // CommandNotFoundException on every prompt, and the hook's whole job
+        // is to run quietly.
+        "powershell" => match value {
+            Some(value) => format!("$env:{var} = \"{value}\"\n"),
+            None => format!("Remove-Item Env:{var} -ErrorAction SilentlyContinue\n"),
+        },
         _ => match value {
             Some(value) => format!("export {var}=\"{value}\"\n"),
             None => format!("unset {var}\n"),
         },
     };
-    // PowerShell cannot be eval'd from a posix hook body, and the prompt hook
-    // it installs calls this with `pwsh -NoProfile -Command`, so the same
-    // syntax works there.
     Some(line)
 }
 
