@@ -44,9 +44,11 @@ pub fn export_hook(layout: &Layout) -> Result<(), String> {
     let java_home = match &selected {
         // What `jenv javahome` would print, because that is what the export
         // plugin puts here: the registration path, not the resolved JDK home.
-        Version::Installed { name, .. } => {
-            Some(crate::link::registered_path(layout, name).display().to_string())
-        }
+        Version::Installed { name, .. } => Some(
+            crate::link::registered_path(layout, name)
+                .display()
+                .to_string(),
+        ),
         Version::System => None,
     };
     // `javac` is what distinguishes a JDK from a JRE; only a JDK has a home

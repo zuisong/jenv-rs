@@ -5,7 +5,6 @@ edition = "2024"
 description = "jenv reimplemented in Rust, with native Windows support and local JDK registration"
 license = "MIT"
 repository = "https://github.com/zuisong/jenv-rs"
-homepage = "https://github.com/zuisong/jenv-rs"
 readme = "README.md"
 keywords = ["java", "jdk", "jenv", "version-manager", "sdkman"]
 categories = ["command-line-utilities", "development-tools"]

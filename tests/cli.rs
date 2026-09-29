@@ -97,7 +97,7 @@ impl Sandbox {
         )
     }
 
-    fn command(&self, cwd: &Path) -> Command {
+    fn command(&self, cwd: &Path) -> Invocation {
         let mut command = Command::new(self.root.join("bin").join(binary_name("jenv")));
         command
             .current_dir(cwd)
@@ -108,15 +108,15 @@ impl Sandbox {
             // A `.java-version` anywhere above the sandbox would silently win,
             // so the walk is pinned to the sandbox.
             .env("JENV_DIR", cwd);
-        command
+        Invocation { command }
     }
 
     fn run(&self, args: &[&str]) -> Run {
-        self.finish(self.command(&self.project()).args(args).output().unwrap())
+        self.finish(self.command(&self.project()).args(args).output())
     }
 
     fn run_in(&self, cwd: &Path, args: &[&str]) -> Run {
-        self.finish(self.command(cwd).args(args).output().unwrap())
+        self.finish(self.command(cwd).args(args).output())
     }
 
     fn finish(&self, output: Output) -> Run {
@@ -129,21 +129,23 @@ impl Sandbox {
 
     /// Run an arbitrary installed program (a shim) with the sandbox wired up.
     fn spawn(&self, program: &Path, args: &[&str]) -> Output {
-        Command::new(program)
+        let mut command = Command::new(program);
+        command
             .args(args)
             .current_dir(self.project())
             .env_clear()
             .env("PATH", self.bin_on_path())
             .env("JENV_ROOT", &self.root)
             .env("JENV_SHELL", "bash")
-            .env("JENV_DIR", self.project())
-            .output()
-            .unwrap()
+            .env("JENV_DIR", self.project());
+        // A shim is a hard link to the sandbox binary, so it is as exposed to
+        // ETXTBSY as the binary itself.
+        output_of(command).unwrap()
     }
 
     /// Run `jenv <args>` and hand back stdout as text.
     fn spawn_text(&self, args: &[&str]) -> String {
-        let output = self.command(&self.project()).args(args).output().unwrap();
+        let output = self.command(&self.project()).args(args).output();
         assert!(
             output.status.success(),
             "stderr:\n{}",
@@ -157,9 +159,9 @@ impl Sandbox {
     fn spawn_text_with(&self, preset: &[(&str, &str)], args: &[&str]) -> String {
         let mut command = self.command(&self.project());
         for (name, value) in preset {
-            command.env(name, value);
+            command = command.env(name, value);
         }
-        let output = command.args(args).output().unwrap();
+        let output = command.args(args).output();
         assert!(
             output.status.success(),
             "stderr:\n{}",
@@ -240,6 +242,68 @@ fn next_id() -> u32 {
     use std::sync::atomic::{AtomicU32, Ordering};
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     COUNTER.fetch_add(1, Ordering::Relaxed)
+}
+
+/// A `jenv` invocation being assembled.
+///
+/// `output` is the only way to run one, so the busy-executable retry cannot be
+/// bypassed by a test that builds its own command chain.
+struct Invocation {
+    command: Command,
+}
+
+impl Invocation {
+    fn args<I, S>(mut self, args: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<std::ffi::OsStr>,
+    {
+        self.command.args(args);
+        self
+    }
+
+    fn env(
+        mut self,
+        name: impl AsRef<std::ffi::OsStr>,
+        value: impl AsRef<std::ffi::OsStr>,
+    ) -> Self {
+        self.command.env(name, value);
+        self
+    }
+
+    fn output(self) -> Output {
+        output_of(self.command).unwrap()
+    }
+}
+
+/// `ETXTBSY`: exec refused because the file is open for writing somewhere.
+const TEXT_FILE_BUSY: i32 = 26;
+
+/// Run a child, retrying briefly while the kernel calls the executable busy.
+///
+/// Every sandbox copies the freshly built binary into place and then runs it.
+/// On a Linux CI runner the temp directory sits on an overlayfs upper layer,
+/// and exec'ing a file written a moment earlier can come back as `ETXTBSY`
+/// while the write is still visible. It is a property of the filesystem, not
+/// of anything under test, and it does not reproduce on a normal disk.
+///
+/// Retrying is safe here because `ETXTBSY` is raised by `exec` itself: the
+/// binary never starts, so nothing it would have done is being skipped, and no
+/// assertion can be masked by it. Matching the errno rather than
+/// `io::ErrorKind::ExecutableFileBusy` keeps this building on stable, where
+/// that variant is not available.
+fn output_of(mut command: Command) -> std::io::Result<Output> {
+    for _ in 0..40 {
+        match command.output() {
+            Err(e) if e.raw_os_error() == Some(TEXT_FILE_BUSY) => back_off(),
+            other => return other,
+        }
+    }
+    unreachable!("the loop only exits by returning")
+}
+
+fn back_off() {
+    std::thread::sleep(std::time::Duration::from_millis(25));
 }
 
 fn copy(from: &str, to: &Path) {
@@ -351,12 +415,18 @@ fn add_rejects_a_release_file_with_no_java_binary() {
 fn add_names_an_unrecognised_architecture_64_bit() {
     let sandbox = Sandbox::new("add-arch");
 
-    for (arch, expected) in [("ppc64le", "temurin64"), ("s390x", "temurin64"), ("x86", "temurin32")] {
+    for (arch, expected) in [
+        ("ppc64le", "temurin64"),
+        ("s390x", "temurin64"),
+        ("x86", "temurin32"),
+    ] {
         let jdk = sandbox.dir.join(format!("jdk-{arch}"));
         std::fs::create_dir_all(jdk.join("bin")).unwrap();
         std::fs::write(
             jdk.join("release"),
-            format!("JAVA_VERSION=\"21.0.2\"\nIMPLEMENTOR=\"Eclipse Adoptium\"\nOS_ARCH=\"{arch}\"\n"),
+            format!(
+                "JAVA_VERSION=\"21.0.2\"\nIMPLEMENTOR=\"Eclipse Adoptium\"\nOS_ARCH=\"{arch}\"\n"
+            ),
         )
         .unwrap();
         write_script(&jdk.join("bin").join("java"), "echo java");
@@ -364,7 +434,11 @@ fn add_names_an_unrecognised_architecture_64_bit() {
         // Reading an unknown architecture as 32-bit would register a 64-bit
         // JDK under a `...32-...` name, which nothing downstream could correct.
         assert!(
-            sandbox.root.join("versions").join(format!("{expected}-21.0.2")).exists(),
+            sandbox
+                .root
+                .join("versions")
+                .join(format!("{expected}-21.0.2"))
+                .exists(),
             "{arch} should register as {expected}"
         );
     }
@@ -493,8 +567,7 @@ fn the_environment_variable_outranks_every_file() {
         .command(&sandbox.project())
         .args(["version-name"])
         .env("JENV_VERSION", "21.0.2")
-        .output()
-        .unwrap();
+        .output();
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "21.0.2");
 }
 
@@ -505,8 +578,7 @@ fn an_uninstalled_version_is_an_error_not_a_silent_fallback() {
         .command(&sandbox.project())
         .args(["version-name"])
         .env("JENV_VERSION", "21")
-        .output()
-        .unwrap();
+        .output();
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("is not installed"));
 }
@@ -747,10 +819,15 @@ fn which_names_the_active_versions_binary() {
 
     // Like `jenv which` in the shell version, this names the path under
     // `versions/` that will be executed, not the JDK home behind the symlink.
-    sandbox
-        .run(&["which", "javac"])
-        .succeeds()
-        .stdout_is(sandbox.registered("21").join("bin").join("javac").display().to_string().as_str());
+    sandbox.run(&["which", "javac"]).succeeds().stdout_is(
+        sandbox
+            .registered("21")
+            .join("bin")
+            .join("javac")
+            .display()
+            .to_string()
+            .as_str(),
+    );
 
     // `whence` reports every registered name that provides the command, which
     // for a JDK added by `jenv add` is all four of its aliases.
@@ -942,8 +1019,12 @@ fn the_install_location_does_not_matter_as_long_as_it_is_on_path() {
     std::fs::create_dir_all(&elsewhere).unwrap();
     copy(JENV, &elsewhere.join(binary_name("jenv")));
 
-    // The sandbox's own copy stays put; PATH is what the child sees.
-    let run = std::process::Command::new(sandbox.root.join("bin").join(binary_name("jenv")))
+    // The sandbox's own copy stays put; PATH is what the child sees. Built by
+    // hand rather than through the sandbox, because the point of the test is a
+    // different install location, so it has to reach the retry itself.
+    let mut command =
+        std::process::Command::new(sandbox.root.join("bin").join(binary_name("jenv")));
+    command
         .args(["add", &sandbox.jdk.display().to_string()])
         .current_dir(sandbox.project())
         .env_clear()
@@ -958,9 +1039,8 @@ fn the_install_location_does_not_matter_as_long_as_it_is_on_path() {
         )
         .env("JENV_ROOT", &sandbox.root)
         .env("JENV_SHELL", "bash")
-        .env("JENV_DIR", sandbox.project())
-        .output()
-        .unwrap();
+        .env("JENV_DIR", sandbox.project());
+    let run = output_of(command).unwrap();
     assert!(
         run.status.success(),
         "add failed: {}",
@@ -1178,22 +1258,34 @@ fn a_closed_pipe_ends_the_command_quietly() {
 
     // `jenv versions | head -1` must not panic; every other Unix tool just
     // stops writing.
-    let child = Command::new("sh")
-        .arg("-c")
-        .arg(format!(
-            "{} versions | head -1 && {} completions bash | head -c 20 >/dev/null && echo SURVIVED",
-            sandbox.root.join("bin").join(binary_name("jenv")).display(),
-            sandbox.root.join("bin").join(binary_name("jenv")).display(),
-        ))
-        .current_dir(sandbox.project())
-        .env_clear()
-        .env("PATH", env_path())
-        .env("JENV_ROOT", &sandbox.root)
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-
-    let out = child.wait_with_output().unwrap();
+    // The busy binary is exec'd by the shell, not by this process, so there is
+    // no spawn to retry here: the whole pipeline is re-run instead, and a real
+    // regression simply fails every attempt.
+    let mut out = None;
+    for _ in 0..40 {
+        let child = Command::new("sh")
+            .arg("-c")
+            .arg(format!(
+                "{} versions | head -1 && {} completions bash | head -c 20 >/dev/null && echo SURVIVED",
+                sandbox.root.join("bin").join(binary_name("jenv")).display(),
+                sandbox.root.join("bin").join(binary_name("jenv")).display(),
+            ))
+            .current_dir(sandbox.project())
+            .env_clear()
+            .env("PATH", env_path())
+            .env("JENV_ROOT", &sandbox.root)
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let attempt = child.wait_with_output().unwrap();
+        if attempt.status.success() && String::from_utf8_lossy(&attempt.stdout).contains("SURVIVED")
+        {
+            out = Some(attempt);
+            break;
+        }
+        back_off();
+    }
+    let out = out.expect("the pipeline must succeed within the retry budget");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         out.status.success(),
