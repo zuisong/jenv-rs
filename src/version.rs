@@ -98,8 +98,14 @@ pub fn select(layout: &Layout) -> Result<Selection, String> {
 }
 
 fn build(layout: &Layout, name: &str, origin: &str) -> Result<Selection, String> {
+    // `exists` and `home_of` each stat the entry, so a concurrent
+    // `jenv remove` can land between them. That is an ordinary "not installed"
+    // rather than a reason to abort, so the lookup is repeated and its failure
+    // reported as the error the caller already understands.
     if link::exists(layout, name) {
-        let home = link::home_of(layout, name).expect("exists implies a resolvable home");
+        let Some(home) = link::home_of(layout, name) else {
+            return Err(format!("jenv: version `{name}' is not installed"));
+        };
         return Ok(Selection {
             version: Version::Installed {
                 name: name.to_string(),
@@ -113,7 +119,9 @@ fn build(layout: &Layout, name: &str, origin: &str) -> Result<Selection, String>
     if let Some(stripped) = name.strip_prefix("java-")
         && link::exists(layout, stripped)
     {
-        let home = link::home_of(layout, stripped).expect("checked above");
+        let Some(home) = link::home_of(layout, stripped) else {
+            return Err(format!("jenv: version `{name}' is not installed"));
+        };
         eprintln!("warning: ignoring extraneous `java-' prefix in version `{name}'");
         eprintln!("         (set by {origin})");
         return Ok(Selection {

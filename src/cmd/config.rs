@@ -99,11 +99,20 @@ pub fn shell(layout: &Layout, requested: Option<String>, unset: bool) -> Result<
     println!(
         "{}",
         match shell.as_str() {
-            "fish" => format!("set -gx JENV_VERSION \"{requested}\""),
+            "fish" => format!(
+                "set -gx JENV_VERSION {}",
+                super::quote::shell_quote(&shell, &requested)
+            ),
             // PowerShell has no `export`; this line goes straight into
             // Invoke-Expression, so POSIX syntax would throw on every use.
-            "powershell" => format!("$env:JENV_VERSION = \"{requested}\""),
-            _ => format!("export JENV_VERSION=\"{requested}\""),
+            "powershell" => format!(
+                "$env:JENV_VERSION = {}",
+                super::quote::shell_quote(&shell, &requested)
+            ),
+            _ => format!(
+                "export JENV_VERSION={}",
+                super::quote::shell_quote(&shell, &requested)
+            ),
         }
     );
     Ok(())
@@ -157,8 +166,13 @@ fn print_options(value: &str, origin: &str, verbose: bool) {
 }
 
 fn options_file(layout: &Layout) -> PathBuf {
-    for start in [crate::cmd::version_cmd::jenv_dir(), PathBuf::from(".")] {
-        let mut current = Some(start);
+    // Both legs are made absolute first: `Path::parent` on a bare `.` stops
+    // immediately, so a relative `$JENV_DIR` would otherwise walk no further
+    // than the current directory.
+    let fallback = std::path::PathBuf::from(".");
+    let from_pwd = crate::layout::absolute(&fallback);
+    for start in [crate::cmd::version_cmd::jenv_dir(), from_pwd] {
+        let mut current = Some(crate::layout::absolute(&start));
         while let Some(dir) = current {
             let candidate = dir.join(".java-options");
             if candidate.exists() {

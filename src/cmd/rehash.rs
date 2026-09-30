@@ -123,8 +123,15 @@ fn write_shim(source: &Path, target: &Path) -> std::io::Result<()> {
     }
 
     // Stage under a temporary name and rename, so a concurrent `java` never
-    // observes a half-written executable.
-    let staging = target.with_extension(format!("tmp-{}", std::process::id()));
+    // observes a half-written executable. The suffix is appended to the file
+    // name rather than set as an extension: `with_extension` would replace
+    // whatever follows the last dot, collapsing `a.b` and `a.c` onto one
+    // staging path.
+    let staging = target.with_file_name(format!(
+        "{}.tmp-{}",
+        target.file_name().unwrap_or_default().to_string_lossy(),
+        std::process::id()
+    ));
     std::fs::copy(source, &staging)?;
     if let Err(e) = std::fs::rename(&staging, target) {
         let _ = std::fs::remove_file(&staging);

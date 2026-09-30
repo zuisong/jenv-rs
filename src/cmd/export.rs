@@ -83,18 +83,21 @@ fn render(shell: &str, var: &str, value: Option<&str>) -> Option<String> {
 
     let line = match shell {
         "fish" => match value {
-            Some(value) => format!("set -gx {var} \"{value}\"\n"),
+            Some(value) => format!(
+                "set -gx {var} {}\n",
+                super::quote::shell_quote(shell, value)
+            ),
             None => format!("set -e {var}\n"),
         },
         // PowerShell has no `export` and no `unset`; both would raise
         // CommandNotFoundException on every prompt, and the hook's whole job
         // is to run quietly.
         "powershell" => match value {
-            Some(value) => format!("$env:{var} = \"{value}\"\n"),
+            Some(value) => format!("$env:{var} = {}\n", super::quote::shell_quote(shell, value)),
             None => format!("Remove-Item Env:{var} -ErrorAction SilentlyContinue\n"),
         },
         _ => match value {
-            Some(value) => format!("export {var}=\"{value}\"\n"),
+            Some(value) => format!("export {var}={}\n", super::quote::shell_quote(shell, value)),
             None => format!("unset {var}\n"),
         },
     };

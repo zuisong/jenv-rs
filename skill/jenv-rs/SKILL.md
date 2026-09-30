@@ -75,7 +75,10 @@ Temurin 21.0.2 that is `temurin64-21.0.2`, `21.0.2`, `21.0` and `21` — four
 entries, all equivalent. This multi-alias behaviour is the reason to use jenv
 at all, and it is the thing `proto` and `mise` do not do.
 
-`jenv add <name> <path>` registers only `<name>`.
+`jenv add <name> <path>` registers only `<name>`. The name is taken on trust
+except for one guard: if it already belongs to a *different* JDK, the command
+refuses rather than silently shadowing it. Pass `--force` to override, the
+same way the interactive prompt would allow.
 
 Prefer `jenv add` over creating entries under `versions/` yourself. `add`
 reads the JDK's `release` file first and only falls back to parsing
@@ -97,7 +100,7 @@ resolve the registration path yourself.
 
 | Command | Effect |
 |---|---|
-| `jenv add [<name>] <path>` | register a JDK; rehashes |
+| `jenv add [<name>] <path>` | register a JDK; rehashes; `--force` overrides an existing name |
 | `jenv global [<version>]` | set or show the fallback version |
 | `jenv local [<version>]` | set or show this directory's version, via `.java-version` |
 | `jenv shell [<version>]` | set or show this session's version; prints a line for the shell to `eval` |

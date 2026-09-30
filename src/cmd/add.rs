@@ -19,6 +19,22 @@ pub fn add(layout: &Layout, target: &[String], force: bool) -> Result<(), String
 
     let jdk = probe::probe(&path)?;
 
+    // A caller-supplied name is otherwise taken on trust, but it must not read
+    // as *another* JDK's canonical identity: registering a 17 JDK as `21`
+    // would shadow the real 21 without saying so. The JDK's own canonical
+    // name is not a collision — that is the supported way to rename a JDK
+    // whose banner is misidentified — so it is exempted. `--force` overrides,
+    // matching the prompt the interactive path would have shown.
+    if let Some(name) = alias.as_deref()
+        && !force
+        && name != jdk.alias()
+        && link::exists(layout, name)
+    {
+        return Err(format!(
+            "jenv: `{name}' is already taken by another JDK; pass --force to override"
+        ));
+    }
+
     // A caller-supplied name registers exactly one alias; that is how you add
     // a JDK whose banner would otherwise be misidentified.
     let names = match alias {

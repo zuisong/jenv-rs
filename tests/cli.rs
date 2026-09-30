@@ -386,6 +386,40 @@ fn add_with_an_explicit_alias_registers_only_that_name() {
 }
 
 #[test]
+fn add_refuses_an_alias_that_belongs_to_another_jdk() {
+    let sandbox = Sandbox::new("add-collide");
+    sandbox
+        .run(&["add", &sandbox.jdk.display().to_string()])
+        .succeeds();
+
+    // `21` is a real registration for this JDK's own version. Naming a
+    // *different* JDK `21` would shadow it silently.
+    let other = sandbox.dir.join("jdk-17");
+    std::fs::create_dir_all(other.join("bin")).unwrap();
+    std::fs::write(
+        other.join("release"),
+        "JAVA_VERSION=\"17.0.9\"\nIMPLEMENTOR=\"Eclipse Adoptium\"\nOS_ARCH=\"aarch64\"\n",
+    )
+    .unwrap();
+    write_script(&other.join("bin").join("java"), "echo java");
+
+    sandbox
+        .run(&["add", "21", &other.display().to_string()])
+        .fails()
+        .contains("already taken by another JDK");
+
+    // The real 21 is untouched, and `--force` is the documented way through.
+    assert_eq!(
+        std::fs::read_link(sandbox.registered("21")).unwrap(),
+        sandbox.jdk
+    );
+    sandbox
+        .run(&["add", "--force", "21", &other.display().to_string()])
+        .succeeds();
+    assert_eq!(std::fs::read_link(sandbox.registered("21")).unwrap(), other);
+}
+
+#[test]
 fn add_rejects_a_directory_that_is_not_a_jdk() {
     let sandbox = Sandbox::new("add-invalid");
     let empty = sandbox.dir.join("empty");
@@ -630,7 +664,7 @@ fn the_powershell_hook_and_shell_line_use_powershell_syntax() {
     assert!(hook.contains("$env:JAVA_HOME = "), "{hook}");
 
     let shell_line = sandbox.spawn_text_with(&[("JENV_SHELL", "powershell")], &["shell", "21"]);
-    assert_eq!(shell_line.trim(), "$env:JENV_VERSION = \"21\"");
+    assert_eq!(shell_line.trim(), "$env:JENV_VERSION = '21'");
 
     // Clearing is a cmdlet in PowerShell, not a keyword. The hook only speaks
     // when the environment disagrees, so there has to be something to clear.
@@ -760,7 +794,7 @@ fn shell_prints_the_line_the_parent_shell_has_to_eval() {
     sandbox
         .run(&["shell", "21"])
         .succeeds()
-        .stdout_is("export JENV_VERSION=\"21\"");
+        .stdout_is("export JENV_VERSION='21'");
     sandbox
         .run(&["shell", "--unset"])
         .succeeds()
@@ -769,6 +803,78 @@ fn shell_prints_the_line_the_parent_shell_has_to_eval() {
         .run(&["shell", "99"])
         .fails()
         .contains("not installed");
+}
+
+/// A version name is not trusted input: it can arrive from `.java-version` in
+/// a cloned repository, and the line this prints is `eval`'d by the parent
+/// shell. A name carrying a quote must therefore come back as inert text.
+#[test]
+fn shell_quotes_a_version_name_that_would_escape_the_literal() {
+    let sandbox = Sandbox::new("shell-injection");
+    sandbox
+        .run(&["add", &sandbox.jdk.display().to_string()])
+        .succeeds();
+
+    // Register the hostile name directly: `jenv add` cannot create it, but a
+    // shared or cloned `$JENV_ROOT` can carry one.
+    let hostile = r#"x"; touch PWNED; #"#;
+    std::os::unix::fs::symlink(&sandbox.jdk, sandbox.registered(hostile)).unwrap();
+
+    let line = sandbox.run(&["shell", hostile]).succeeds().stdout.clone();
+    assert_eq!(
+        line.trim_end(),
+        r#"export JENV_VERSION='x"; touch PWNED; #'"#
+    );
+
+    // The proof is that a real shell evaluating the line sets the variable to
+    // the literal name instead of running the payload.
+    let script = format!("{line}\nprintf '%s' \"$JENV_VERSION\"");
+    let out = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(&script)
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), hostile);
+    assert!(!sandbox.project().join("PWNED").exists());
+}
+
+/// The prompt hook runs on every prompt and takes its value from the version
+/// the current directory selects, so a `.java-version` from an untrusted
+/// checkout is the realistic attack: `git clone` plus `cd` must not execute.
+#[test]
+fn the_export_hook_does_not_execute_a_hostile_version_file() {
+    let sandbox = Sandbox::new("export-injection");
+    sandbox
+        .run(&["add", &sandbox.jdk.display().to_string()])
+        .succeeds();
+
+    // A name that is registered *and* carries a shell payload.
+    let hostile = r#"x"; touch PWNED; #"#;
+    std::os::unix::fs::symlink(&sandbox.jdk, sandbox.registered(hostile)).unwrap();
+    std::fs::write(
+        sandbox.project().join(".java-version"),
+        format!("{hostile}\n"),
+    )
+    .unwrap();
+
+    let code = sandbox.spawn_text(&["export-hook"]);
+    assert!(!code.contains(r#""x";"#), "payload left unquoted:\n{code}");
+
+    // Evaluating the hook's output, as the shell does, must not run `touch`.
+    let script = format!("{code}\nexit 0");
+    let mut command = Command::new("/bin/sh");
+    command
+        .arg("-c")
+        .arg(&script)
+        .current_dir(sandbox.project())
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin");
+    let _ = command.output().unwrap();
+
+    assert!(
+        !sandbox.project().join("PWNED").exists(),
+        "the prompt hook executed the payload"
+    );
 }
 
 // --------------------------------------------------------------- rehash
@@ -1076,16 +1182,13 @@ fn the_export_hook_publishes_java_home_and_jdk_home_for_a_jdk() {
     let hook = sandbox.spawn_text(&["export-hook"]);
     let home = sandbox.registered("21").display().to_string();
     assert!(
-        hook.contains(&format!("export JAVA_HOME=\"{home}\"")),
+        hook.contains(&format!("export JAVA_HOME='{home}'")),
         "{hook}"
     );
-    assert!(
-        hook.contains("export JENV_FORCEJAVAHOME=\"true\""),
-        "{hook}"
-    );
+    assert!(hook.contains("export JENV_FORCEJAVAHOME='true'"), "{hook}");
     // javac is present, so this is a JDK and JDK_HOME is published too.
     assert!(hook.contains("export JDK_HOME="), "{hook}");
-    assert!(hook.contains("export JENV_FORCEJDKHOME=\"true\""), "{hook}");
+    assert!(hook.contains("export JENV_FORCEJDKHOME='true'"), "{hook}");
 }
 
 #[test]
@@ -1108,7 +1211,7 @@ fn the_export_hook_clears_java_home_for_a_jre_and_for_system() {
     );
     assert!(
         stale.contains(&format!(
-            "export JAVA_HOME=\"{}\"",
+            "export JAVA_HOME='{}'",
             sandbox.registered("21").display()
         )),
         "{stale}"
@@ -1144,7 +1247,7 @@ fn the_export_hook_repoints_jdk_home_when_the_version_moves() {
     );
     let home = sandbox.registered("21").display().to_string();
     assert!(
-        hook.contains(&format!("export JDK_HOME=\"{home}\"")),
+        hook.contains(&format!("export JDK_HOME='{home}'")),
         "{hook}"
     );
 }
