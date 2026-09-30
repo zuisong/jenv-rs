@@ -151,6 +151,9 @@ pub enum Command {
     /// Print the jenv root directory
     Root,
 
+    /// Print operating notes for an automated agent
+    Skill,
+
     /// List the commands that have a shim
     Shims {
         #[arg(long)]

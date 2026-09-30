@@ -117,6 +117,15 @@ fn complete_versions(layout: &Layout) {
 }
 
 /// `jenv info` — enough to diagnose a broken install over a bug report.
+/// `jenv skill` — the reference an automated agent needs.
+///
+/// Kept in the binary rather than shipped as a separate document so that it
+/// cannot drift from the code that has to match it, and so that it is
+/// available wherever `jenv` itself is.
+pub fn skill() {
+    print!("{}", include_str!("../../docs/SKILL.md"));
+}
+
 pub fn info(layout: &Layout) {
     let version = match crate::version::select(layout) {
         Ok(selection) => format!("{} (set by {})", selection.version.name(), selection.origin),

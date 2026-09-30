@@ -43,6 +43,10 @@ processes, that is the difference you feel.
   main reason the original has an `export` plugin.
 - **Shell completion is generated** by `clap_complete` from the same
   definition the parser uses, so it cannot drift from the CLI.
+- **Built-in operating notes.** `jenv skill` prints a reference written for an
+  automated agent: the version resolution order, what the path-returning
+  commands actually return, and what is not supported. It is compiled into the
+  binary, so it is present wherever `jenv` is and cannot drift from the code.
 
 ## `JAVA_HOME` follows the version
 

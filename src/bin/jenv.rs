@@ -125,6 +125,10 @@ fn dispatch(layout: &Layout, command: Command) -> Result<(), String> {
         }
         Command::Rehash { force } => cmd::rehash(layout, force),
         Command::Remove { versions } => cmd::remove(layout, &versions),
+        Command::Skill => {
+            cmd::skill();
+            Ok(())
+        }
         Command::Shims { short } => {
             cmd::shims(layout, short);
             Ok(())

@@ -648,6 +648,25 @@ fn the_powershell_hook_and_shell_line_use_powershell_syntax() {
 }
 
 #[test]
+fn the_skill_document_covers_every_command_the_cli_advertises() {
+    let sandbox = Sandbox::new("skill-drift");
+    let advertised = sandbox.run(&["commands"]).succeeds();
+    let skill = sandbox.spawn_text(&["skill"]);
+    assert!(!skill.trim().is_empty());
+
+    // The point of the document is that an agent can act on it, so a command
+    // the CLI offers but the document never mentions is the exact failure it
+    // exists to prevent. Extra entries are fine: the hidden `complete` is
+    // documented on purpose.
+    for name in advertised.stdout.lines().filter(|l| !l.trim().is_empty()) {
+        assert!(
+            skill.contains(&format!("`jenv {name}")),
+            "`jenv {name}` is advertised by `jenv commands` but missing from `jenv skill`"
+        );
+    }
+}
+
+#[test]
 fn prefix_system_ignores_which_version_is_selected() {
     let sandbox = Sandbox::new("prefix-system");
     sandbox
