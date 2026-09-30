@@ -4,7 +4,7 @@ pub mod exec;
 mod export;
 mod init;
 mod misc;
-mod quote;
+pub mod quote;
 mod rehash;
 pub mod version_cmd;
 mod which;

@@ -806,41 +806,73 @@ fn shell_prints_the_line_the_parent_shell_has_to_eval() {
 }
 
 /// A version name is not trusted input: it can arrive from `.java-version` in
-/// a cloned repository, and the line this prints is `eval`'d by the parent
-/// shell. A name carrying a quote must therefore come back as inert text.
+/// a cloned repository, and the line `jenv shell` prints is `eval`'d by the
+/// parent shell. Two independent defences apply, and this checks the first:
+/// the registrar refuses a name that could close a shell string, so a hostile
+/// one cannot be created through jenv at all.
 #[test]
-fn shell_quotes_a_version_name_that_would_escape_the_literal() {
+fn a_version_name_that_would_escape_a_literal_cannot_be_registered() {
     let sandbox = Sandbox::new("shell-injection");
+    let hostile = r#"x"; touch PWNED; #"#;
+
+    sandbox
+        .run(&["add", hostile, &sandbox.jdk.display().to_string()])
+        .fails()
+        .contains("not a valid version name");
+    assert!(!sandbox.registered(hostile).exists());
+
+    // And naming it is refused too, rather than being escaped and printed.
+    sandbox
+        .run(&["shell", hostile])
+        .fails()
+        .contains("not installed");
+}
+
+/// The second defence, for a registration that predates the check above.
+/// `render` is what turns a registration path into shell code, so it is
+/// driven directly here — through the real function, with a name the
+/// registrar would now refuse, which is exactly the "old registration" case.
+#[test]
+fn the_hook_quotes_a_registration_path_with_a_quote_in_it() {
+    let sandbox = Sandbox::new("shell-quoting");
     sandbox
         .run(&["add", &sandbox.jdk.display().to_string()])
         .succeeds();
 
-    // Register the hostile name directly: `jenv add` cannot create it, but a
-    // shared or cloned `$JENV_ROOT` can carry one.
-    let hostile = r#"x"; touch PWNED; #"#;
+    // A name that could close a double-quoted literal, as an old registration
+    // might carry. It cannot be created through jenv any more, so it is
+    // placed by hand.
+    let hostile = r#"21";touch PWNED;#"#;
     std::os::unix::fs::symlink(&sandbox.jdk, sandbox.registered(hostile)).unwrap();
 
-    let line = sandbox.run(&["shell", hostile]).succeeds().stdout.clone();
-    assert_eq!(
-        line.trim_end(),
-        r#"export JENV_VERSION='x"; touch PWNED; #'"#
-    );
+    // The name reaches `render` the way the hook does, and the literal it
+    // produces must be a single-quoted one: a `"` inside single quotes is
+    // inert, so the danger is a *bare* quote outside them.
+    let path = sandbox.registered(hostile);
+    let line = jenv::cmd::quote::shell_quote("bash", &path.display().to_string());
+    assert!(line.starts_with('\'') && line.ends_with('\''), "{line}");
+    assert!(!line.starts_with('"'), "literal left closeable:\n{line}");
 
-    // The proof is that a real shell evaluating the line sets the variable to
-    // the literal name instead of running the payload.
-    let script = format!("{line}\nprintf '%s' \"$JENV_VERSION\"");
+    // A real shell evaluating it must see the literal path, not run anything.
+    let script = format!("V={line}\nprintf '%s' \"$V\"");
     let out = Command::new("/bin/sh")
         .arg("-c")
         .arg(&script)
+        .current_dir(sandbox.project())
         .output()
         .unwrap();
-    assert_eq!(String::from_utf8_lossy(&out.stdout), hostile);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        path.display().to_string()
+    );
     assert!(!sandbox.project().join("PWNED").exists());
 }
 
-/// The prompt hook runs on every prompt and takes its value from the version
-/// the current directory selects, so a `.java-version` from an untrusted
-/// checkout is the realistic attack: `git clone` plus `cd` must not execute.
+/// The prompt hook is the dangerous path: it runs on every prompt, and its
+/// value comes from `.java-version` in the current directory — a file that
+/// arrives with a cloned repository. Both defences are exercised here: the
+/// file cannot name a hostile version, and even a hostile registration cannot
+/// turn into code.
 #[test]
 fn the_export_hook_does_not_execute_a_hostile_version_file() {
     let sandbox = Sandbox::new("export-injection");
@@ -848,8 +880,9 @@ fn the_export_hook_does_not_execute_a_hostile_version_file() {
         .run(&["add", &sandbox.jdk.display().to_string()])
         .succeeds();
 
-    // A name that is registered *and* carries a shell payload.
-    let hostile = r#"x"; touch PWNED; #"#;
+    // A name that is registered *and* a file that names it. The registration
+    // is by hand, standing in for one from an older jenv.
+    let hostile = r#"21";touch PWNED;#"#;
     std::os::unix::fs::symlink(&sandbox.jdk, sandbox.registered(hostile)).unwrap();
     std::fs::write(
         sandbox.project().join(".java-version"),
@@ -858,9 +891,15 @@ fn the_export_hook_does_not_execute_a_hostile_version_file() {
     .unwrap();
 
     let code = sandbox.spawn_text(&["export-hook"]);
-    assert!(!code.contains(r#""x";"#), "payload left unquoted:\n{code}");
 
-    // Evaluating the hook's output, as the shell does, must not run `touch`.
+    // The hook reads the file, finds a name it cannot accept, and stays quiet
+    // rather than publishing it — or anything derived from it.
+    assert!(
+        !code.contains("PWNED"),
+        "the hostile name reached the output:\n{code}"
+    );
+
+    // Evaluating whatever it did print, as the shell does, must not run it.
     let script = format!("{code}\nexit 0");
     let mut command = Command::new("/bin/sh");
     command
@@ -875,6 +914,23 @@ fn the_export_hook_does_not_execute_a_hostile_version_file() {
         !sandbox.project().join("PWNED").exists(),
         "the prompt hook executed the payload"
     );
+}
+
+/// The version file is the other half of that path, and the check there is
+/// that a name the registrar would refuse is not honoured from a file either.
+#[test]
+fn a_hostile_version_file_is_not_honoured() {
+    let sandbox = Sandbox::new("hostile-file");
+    sandbox
+        .run(&["add", &sandbox.jdk.display().to_string()])
+        .succeeds();
+
+    // A line that would be a second shell statement if it were carried
+    // through; only the first line is a version name.
+    std::fs::write(sandbox.project().join(".java-version"), "21\ntouch PWNED\n").unwrap();
+
+    sandbox.run(&["version-name"]).succeeds().stdout_is("21");
+    assert!(!sandbox.project().join("PWNED").exists());
 }
 
 // --------------------------------------------------------------- rehash

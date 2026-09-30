@@ -51,10 +51,18 @@ fn walk_up(start: &Path) -> impl Iterator<Item = PathBuf> + '_ {
     })
 }
 
+/// The version named by a version file.
+///
+/// Only the first line is read. A version file holds a version name, so
+/// anything after a newline is not part of one — and returning it would put a
+/// second line into the shell code `jenv shell` and the prompt hook print.
+/// A name that could not be registered is rejected here too, by the same rule
+/// `link::valid_name` applies, so a `.java-version` cannot name something
+/// `jenv add` would have refused.
 pub fn read_version_file(path: &Path) -> Option<String> {
     let raw = std::fs::read_to_string(path).ok()?;
-    let trimmed = raw.trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_string())
+    let name = raw.lines().next().unwrap_or_default().trim();
+    (!name.is_empty() && crate::link::valid_name(name)).then(|| name.to_string())
 }
 
 /// Resolve the active version. Returns `Err` with a jenv-compatible message
@@ -163,6 +171,34 @@ mod tests {
 
         let layout = Layout::with_root(&tmp);
         assert_eq!(version_file(&layout, &nested), tmp.join(".java-version"));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A version file names a version, so only the first line is one. Reading
+    /// the rest would put a second line into the shell code the prompt hook
+    /// prints, and a name the registrar would have refused is not honoured
+    /// from a file either.
+    #[test]
+    fn a_version_file_yields_one_name_or_nothing() {
+        let tmp = std::env::temp_dir().join(format!("jenv-rs-rvf-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let read = |body: &str| {
+            let path = tmp.join(".java-version");
+            std::fs::write(&path, body).unwrap();
+            read_version_file(&path)
+        };
+
+        assert_eq!(read("21\n"), Some("21".into()));
+        // A trailing newline is ordinary; a second line is not part of a name.
+        assert_eq!(read("21\ntouch PWNED\n"), Some("21".into()));
+        assert_eq!(read("  21  \n"), Some("21".into()));
+        // Empty, whitespace, and anything a name cannot be read as nothing.
+        assert_eq!(read("\n"), None);
+        assert_eq!(read("   "), None);
+        assert_eq!(read(r#"x"; touch PWNED; #"#), None);
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
