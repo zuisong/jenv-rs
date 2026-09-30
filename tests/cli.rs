@@ -419,6 +419,31 @@ fn add_refuses_an_alias_that_belongs_to_another_jdk() {
     assert_eq!(std::fs::read_link(sandbox.registered("21")).unwrap(), other);
 }
 
+/// The guard above must not turn an ordinary re-add into an error. Naming a
+/// JDK with a custom alias and then repeating the same command has to stay
+/// idempotent — only a name that already points at a *different* home is a
+/// collision.
+#[test]
+fn add_twice_with_the_same_custom_alias_is_idempotent() {
+    let sandbox = Sandbox::new("add-alias-twice");
+    let jdk = sandbox.jdk.display().to_string();
+
+    sandbox
+        .run(&["add", "my-jdk", &jdk])
+        .succeeds()
+        .stdout_is("my-jdk added");
+
+    // Same alias, same JDK: nothing to override, so no complaint.
+    sandbox
+        .run(&["add", "my-jdk", &jdk])
+        .succeeds()
+        .contains("already present, skip installation");
+    assert_eq!(
+        std::fs::read_link(sandbox.registered("my-jdk")).unwrap(),
+        sandbox.jdk
+    );
+}
+
 #[test]
 fn add_rejects_a_directory_that_is_not_a_jdk() {
     let sandbox = Sandbox::new("add-invalid");
