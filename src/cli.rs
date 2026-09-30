@@ -152,6 +152,10 @@ pub enum Command {
     Root,
 
     /// Print operating notes for an automated agent
+    ///
+    /// The output is a conforming Agent Skills SKILL.md. Write it to
+    /// `jenv-rs/SKILL.md`: a skills directory is only accepted when the
+    /// directory name matches the `name` in the frontmatter.
     Skill,
 
     /// List the commands that have a shim

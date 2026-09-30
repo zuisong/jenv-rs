@@ -47,6 +47,16 @@ processes, that is the difference you feel.
   automated agent: the version resolution order, what the path-returning
   commands actually return, and what is not supported. It is compiled into the
   binary, so it is present wherever `jenv` is and cannot drift from the code.
+  The output is a conforming [Agent Skills](https://agentskills.io) `SKILL.md`,
+  so an agent can install it directly:
+
+  ```sh
+  mkdir -p ~/.claude/skills/jenv-rs
+  jenv skill > ~/.claude/skills/jenv-rs/SKILL.md
+  ```
+
+  The directory has to be named `jenv-rs`; a skills directory is only accepted
+  when its name matches the `name` in the frontmatter.
 
 ## `JAVA_HOME` follows the version
 

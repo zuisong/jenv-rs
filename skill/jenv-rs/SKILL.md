@@ -1,9 +1,23 @@
-# jenv-rs — operating notes for an agent
+---
+name: jenv-rs
+description: >-
+  Operating reference for jenv-rs, the Rust reimplementation of jenv, the Java
+  version manager. Use when driving the `jenv` CLI from a script, agent or CI:
+  registering a JDK with `jenv add`, pinning a version with `jenv local`,
+  `jenv global` or `jenv shell`, resolving which version is active and why,
+  setting up a shell with `jenv init`, or wiring JAVA_HOME. Covers the version
+  resolution order, why `jenv prefix` and `jenv javahome` report the
+  registration path rather than the JDK's real location, the 127 exit status
+  for a command no version provides, and the fact that jenv plugins are not
+  supported.
+license: MIT (see LICENSE at the repository root)
+---
 
-A drop-in reimplementation of [`jenv`](https://github.com/jenv/jenv) in Rust.
-Same commands, same `$JENV_ROOT` layout, same `.java-version` resolution.
-This document is the reference for automating it; `jenv --help` documents the
-flags, not the behaviour.
+# Operating jenv-rs
+
+[`jenv`](https://github.com/jenv/jenv) reimplemented in Rust: same commands,
+same `$JENV_ROOT` layout, same `.java-version` resolution. This document covers
+the behaviour; `jenv --help` covers the flags.
 
 ## The one thing that is not like a normal CLI
 

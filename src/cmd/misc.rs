@@ -119,11 +119,13 @@ fn complete_versions(layout: &Layout) {
 /// `jenv info` — enough to diagnose a broken install over a bug report.
 /// `jenv skill` — the reference an automated agent needs.
 ///
-/// Kept in the binary rather than shipped as a separate document so that it
-/// cannot drift from the code that has to match it, and so that it is
-/// available wherever `jenv` itself is.
+/// The file is a conforming Agent Skills `SKILL.md`: YAML frontmatter followed
+/// by the body, in a directory named after the skill, so `jenv skill` can be
+/// redirected into a skills directory and still validate. It is compiled into
+/// the binary so it is present wherever `jenv` is and cannot be left behind by
+/// a stale checkout.
 pub fn skill() {
-    print!("{}", include_str!("../../docs/SKILL.md"));
+    print!("{}", include_str!("../../skill/jenv-rs/SKILL.md"));
 }
 
 pub fn info(layout: &Layout) {

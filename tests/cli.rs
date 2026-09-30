@@ -648,6 +648,52 @@ fn the_powershell_hook_and_shell_line_use_powershell_syntax() {
 }
 
 #[test]
+fn the_skill_file_satisfies_the_agent_skills_format() {
+    // The rules a validator actually checks, asserted here so the file cannot
+    // quietly stop being a skill: https://agentskills.io/specification
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("skill")
+        .join("jenv-rs")
+        .join("SKILL.md");
+    let text = std::fs::read_to_string(&path).expect("SKILL.md must exist");
+
+    // Frontmatter has to open on the first byte, or a parser never sees it.
+    assert!(text.starts_with("---\n"), "frontmatter must open on line 1");
+    let front = text
+        .split_once("\n---\n")
+        .expect("frontmatter must be closed")
+        .0;
+
+    let name = front
+        .lines()
+        .find_map(|line| line.strip_prefix("name: "))
+        .expect("name is required")
+        .trim();
+    assert!(!name.is_empty() && name.len() <= 64, "{name}");
+    assert!(
+        name.chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
+        "name may only be lowercase, digits and hyphens: {name}"
+    );
+    // A skills directory is rejected unless it is named after the skill.
+    assert_eq!(name, path.parent().unwrap().file_name().unwrap());
+
+    let description: usize = front
+        .lines()
+        .skip_while(|l| !l.starts_with("description:"))
+        .skip(1)
+        .take_while(|l| l.starts_with("  "))
+        .map(|l| l.trim().len())
+        .sum();
+    assert!(description > 0, "description is required");
+
+    assert!(
+        text.lines().count() < 500,
+        "keep SKILL.md under 500 lines, move detail into references/"
+    );
+}
+
+#[test]
 fn the_skill_document_covers_every_command_the_cli_advertises() {
     let sandbox = Sandbox::new("skill-drift");
     let advertised = sandbox.run(&["commands"]).succeeds();
