@@ -242,11 +242,11 @@ directory is enough to stop jenv-rs affecting anything.
 
 ## Windows notes
 
-- **Symlinks.** `versions/<name>` is normally a symlink, which needs Developer
-  Mode or an elevated prompt. Without it jenv-rs writes a text file holding
-  the JDK path instead; `jenv versions` then shows files rather than
-  directories, and everything still works. Turn on *Settings → Privacy &
-  security → For developers → Developer Mode* to get real symlinks.
+- **Symlinks.** `versions/<name>` is a symlink, which needs Developer Mode or
+  an elevated prompt; without it `jenv add` fails. Turn on *Settings → Privacy
+  & security → For developers → Developer Mode* to register versions. A
+  registration made by hand, or by an earlier build, may instead be a text
+  file holding the path, which jenv-rs still reads.
 - **Hard links.** The shims are hard links to `jenv.exe`, which need no
   special privilege on any filesystem that supports them. `jenv rehash` will
   fail on a network share or a FAT volume — keep the data directory on a local

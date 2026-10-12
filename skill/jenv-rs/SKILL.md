@@ -41,8 +41,8 @@ Consequences worth internalising:
 ```
 $JENV_ROOT/                  default: ~/.jenv
   version                   the global version (legacy names: global, default)
-  versions/<name>           registration: a symlink to a JDK home, or on
-                            Windows a text file holding that path
+  versions/<name>           registration: a symlink to a JDK home; an older
+                            one may be a text file holding that path
   shims/<name>              hard link to the jenv binary
   shims/.jenv-shim-version  shim generation marker
   options                   extra arguments, equivalent to JENV_OPTIONS

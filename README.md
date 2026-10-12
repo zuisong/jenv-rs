@@ -32,8 +32,7 @@ processes, that is the difference you feel.
 
 - **Windows.** `jenv add` / `local` / `global` / `exec` / `rehash` / `init` all
   work, `jenv init - powershell` is a first-class target, and the shim is a
-  `.exe`. Version registrations fall back to a text file when the machine
-  cannot create symlinks without an elevated token.
+  `.exe`.
 - **Better JDK detection.** `jenv add` reads the JDK's `release` file first and
   only falls back to parsing `java -version`. It also reports `aarch64` as
   64-bit, which the shell version gets wrong.
@@ -137,7 +136,7 @@ Full instructions, including Windows, are in [INSTALL.md](INSTALL.md).
 ```
 ~/.jenv/                  or $JENV_ROOT
   version                 the global version
-  versions/<name>         a symlink to a JDK home, or on Windows a file holding the path
+  versions/<name>         a symlink to a JDK home
   shims/<name>            a hard link to jenv, the same executable
 ```
 
@@ -155,8 +154,8 @@ See [INSTALL.md](INSTALL.md) for macOS, Linux and Windows.
   for it the way the gradle plugin's hook did.
 - `jenv` does not install JDKs. Neither does this; `jenv add` registers one that
   is already on the machine.
-- On Windows, registering a version without symlink privileges stores a text
-  file, so `dir versions` shows files rather than directories.
+- On Windows, registering a version needs Developer Mode or an elevated
+  prompt: a registration is a symlink, and creating one requires the privilege.
 
 ## Development
 
