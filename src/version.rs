@@ -57,6 +57,23 @@ pub fn read_version_file(path: &Path) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
+/// The version named by a *version name* file.
+///
+/// A version name is one line — a second line is either a trailing newline or
+/// a second command — so only the first is read, and it is rejected unless
+/// `jenv add` would have accepted it as a name. That keeps a `.java-version`
+/// from `git clone` out of the shell code `jenv shell` and the prompt hook
+/// print.
+///
+/// Distinct from [`read_version_file`], which reads values that are not names
+/// at all: `.java-options` holds a whitespace-separated argument list, and
+/// applying the name rule to it would silently drop every option.
+pub fn read_name_file(path: &Path) -> Option<String> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let name = raw.lines().next().unwrap_or_default().trim();
+    (!name.is_empty() && crate::link::valid_name(name)).then(|| name.to_string())
+}
+
 /// Resolve the active version. Returns `Err` with a jenv-compatible message
 /// when the configured version is not registered.
 pub fn select(layout: &Layout) -> Result<Selection, String> {
@@ -87,7 +104,7 @@ pub fn select(layout: &Layout) -> Result<Selection, String> {
     }
 
     let origin = file.display().to_string();
-    let name = read_version_file(&file).unwrap_or_else(|| "system".into());
+    let name = read_name_file(&file).unwrap_or_else(|| "system".into());
     if name == "system" {
         return Ok(Selection {
             version: Version::System,
@@ -98,8 +115,14 @@ pub fn select(layout: &Layout) -> Result<Selection, String> {
 }
 
 fn build(layout: &Layout, name: &str, origin: &str) -> Result<Selection, String> {
+    // `exists` and `home_of` each stat the entry, so a concurrent
+    // `jenv remove` can land between them. That is an ordinary "not installed"
+    // rather than a reason to abort, so the lookup is repeated and its failure
+    // reported as the error the caller already understands.
     if link::exists(layout, name) {
-        let home = link::home_of(layout, name).expect("exists implies a resolvable home");
+        let Some(home) = link::home_of(layout, name) else {
+            return Err(format!("jenv: version `{name}' is not installed"));
+        };
         return Ok(Selection {
             version: Version::Installed {
                 name: name.to_string(),
@@ -113,7 +136,9 @@ fn build(layout: &Layout, name: &str, origin: &str) -> Result<Selection, String>
     if let Some(stripped) = name.strip_prefix("java-")
         && link::exists(layout, stripped)
     {
-        let home = link::home_of(layout, stripped).expect("checked above");
+        let Some(home) = link::home_of(layout, stripped) else {
+            return Err(format!("jenv: version `{name}' is not installed"));
+        };
         eprintln!("warning: ignoring extraneous `java-' prefix in version `{name}'");
         eprintln!("         (set by {origin})");
         return Ok(Selection {
@@ -155,6 +180,40 @@ mod tests {
 
         let layout = Layout::with_root(&tmp);
         assert_eq!(version_file(&layout, &nested), tmp.join(".java-version"));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A version file names a version, so only the first line is one. Reading
+    /// the rest would put a second line into the shell code the prompt hook
+    /// prints, and a name the registrar would have refused is not honoured
+    /// from a file either.
+    #[test]
+    fn a_version_file_yields_one_name_or_nothing() {
+        let tmp = std::env::temp_dir().join(format!("jenv-rs-rvf-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let read = |body: &str| {
+            let path = tmp.join(".java-version");
+            std::fs::write(&path, body).unwrap();
+            read_name_file(&path)
+        };
+
+        assert_eq!(read("21\n"), Some("21".into()));
+        // A trailing newline is ordinary; a second line is not part of a name.
+        assert_eq!(read("21\ntouch PWNED\n"), Some("21".into()));
+        assert_eq!(read("  21  \n"), Some("21".into()));
+        // Empty, whitespace, and anything a name cannot be read as nothing.
+        assert_eq!(read("\n"), None);
+        assert_eq!(read("   "), None);
+        assert_eq!(read(r#"x"; touch PWNED; #"#), None);
+        // A newline splits the file; the first line is the name, and it is
+        // then refused on its own merits. Only a name containing a newline is
+        // dangerous, and a name can no longer contain one.
+        assert_eq!(read("21\ntouch PWNED\n"), Some("21".into()));
+        assert_eq!(read("21;id\ntouch PWNED\n"), None);
+        assert!(!crate::link::valid_name("21\ntouch PWNED"));
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

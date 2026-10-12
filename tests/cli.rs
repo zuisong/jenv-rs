@@ -164,7 +164,12 @@ impl Sandbox {
     /// Same, with a pre-existing environment, so the hook's "already correct,
     /// say nothing" path can be told apart from "needs changing".
     fn spawn_text_with(&self, preset: &[(&str, &str)], args: &[&str]) -> String {
-        let mut command = self.command(&self.project());
+        self.spawn_text_in(&self.project(), preset, args)
+    }
+
+    /// Same, from a chosen working directory.
+    fn spawn_text_in(&self, cwd: &Path, preset: &[(&str, &str)], args: &[&str]) -> String {
+        let mut command = self.command(cwd);
         for (name, value) in preset {
             command = command.env(name, value);
         }
@@ -383,6 +388,79 @@ fn add_with_an_explicit_alias_registers_only_that_name() {
 
     let listed = sandbox.run(&["versions", "--bare"]).succeeds();
     assert_eq!(listed.lines(), vec!["my-jdk"]);
+}
+
+#[test]
+fn add_refuses_an_alias_that_belongs_to_another_jdk() {
+    let sandbox = Sandbox::new("add-collide");
+    sandbox
+        .run(&["add", &sandbox.jdk.display().to_string()])
+        .succeeds();
+
+    // The fixture registers a 21.0.2 JDK under all its names, `21.0.2`
+    // among them. Naming a *second* JDK of that same version `21.0.2` would
+    // silently repoint a name that tools and IDE configs already hold.
+    let other = sandbox.dir.join("jdk-21-other");
+    std::fs::create_dir_all(other.join("bin")).unwrap();
+    std::fs::write(
+        other.join("release"),
+        "JAVA_VERSION=\"21.0.2\"\nIMPLEMENTOR=\"Azul\"\nOS_ARCH=\"aarch64\"\n",
+    )
+    .unwrap();
+    write_script(&other.join("bin").join("java"), "echo java");
+
+    let registered = sandbox.registered("21.0.2");
+    assert!(registered.exists(), "the fixture registers 21.0.2");
+    let before = std::fs::read_link(&registered).unwrap();
+
+    sandbox
+        .run(&["add", "21.0.2", &other.display().to_string()])
+        .fails()
+        .contains("already names another JDK");
+
+    // The original registration is untouched, and `--force` is the documented
+    // way through.
+    assert_eq!(std::fs::read_link(&registered).unwrap(), before);
+    sandbox
+        .run(&["add", "--force", "21.0.2", &other.display().to_string()])
+        .succeeds();
+    assert_eq!(std::fs::read_link(&registered).unwrap(), other);
+
+    // A name that is simply *taken* by a JDK of a different version is not a
+    // collision: naming a 17 JDK `my-17` while `my-17` holds a 21 is the
+    // ordinary rename path, which must keep working.
+    sandbox
+        .run(&["add", "my-custom", &other.display().to_string()])
+        .succeeds();
+    assert_eq!(
+        std::fs::read_link(sandbox.registered("my-custom")).unwrap(),
+        other
+    );
+}
+
+/// The guard above must not turn an ordinary re-add into an error. Naming a
+/// JDK with a custom alias and then repeating the same command has to stay
+/// idempotent — only a name that already points at a *different* home is a
+/// collision.
+#[test]
+fn add_twice_with_the_same_custom_alias_is_idempotent() {
+    let sandbox = Sandbox::new("add-alias-twice");
+    let jdk = sandbox.jdk.display().to_string();
+
+    sandbox
+        .run(&["add", "my-jdk", &jdk])
+        .succeeds()
+        .stdout_is("my-jdk added");
+
+    // Same alias, same JDK: nothing to override, so no complaint.
+    sandbox
+        .run(&["add", "my-jdk", &jdk])
+        .succeeds()
+        .contains("already present, skip installation");
+    assert_eq!(
+        std::fs::read_link(sandbox.registered("my-jdk")).unwrap(),
+        sandbox.jdk
+    );
 }
 
 #[test]
@@ -630,7 +708,7 @@ fn the_powershell_hook_and_shell_line_use_powershell_syntax() {
     assert!(hook.contains("$env:JAVA_HOME = "), "{hook}");
 
     let shell_line = sandbox.spawn_text_with(&[("JENV_SHELL", "powershell")], &["shell", "21"]);
-    assert_eq!(shell_line.trim(), "$env:JENV_VERSION = \"21\"");
+    assert_eq!(shell_line.trim(), "$env:JENV_VERSION = '21'");
 
     // Clearing is a cmdlet in PowerShell, not a keyword. The hook only speaks
     // when the environment disagrees, so there has to be something to clear.
@@ -760,7 +838,7 @@ fn shell_prints_the_line_the_parent_shell_has_to_eval() {
     sandbox
         .run(&["shell", "21"])
         .succeeds()
-        .stdout_is("export JENV_VERSION=\"21\"");
+        .stdout_is("export JENV_VERSION='21'");
     sandbox
         .run(&["shell", "--unset"])
         .succeeds()
@@ -769,6 +847,134 @@ fn shell_prints_the_line_the_parent_shell_has_to_eval() {
         .run(&["shell", "99"])
         .fails()
         .contains("not installed");
+}
+
+/// A version name is not trusted input: it can arrive from `.java-version` in
+/// a cloned repository, and the line `jenv shell` prints is `eval`'d by the
+/// parent shell. Two independent defences apply, and this checks the first:
+/// the registrar refuses a name that could close a shell string, so a hostile
+/// one cannot be created through jenv at all.
+#[test]
+fn a_version_name_that_would_escape_a_literal_cannot_be_registered() {
+    let sandbox = Sandbox::new("shell-injection");
+    let hostile = r#"x"; touch PWNED; #"#;
+
+    sandbox
+        .run(&["add", hostile, &sandbox.jdk.display().to_string()])
+        .fails()
+        .contains("not a valid version name");
+    assert!(!sandbox.registered(hostile).exists());
+
+    // And naming it is refused too, rather than being escaped and printed.
+    sandbox
+        .run(&["shell", hostile])
+        .fails()
+        .contains("not installed");
+}
+
+/// The second defence, for a registration that predates the check above.
+/// `render` is what turns a registration path into shell code, so it is
+/// driven directly here — through the real function, with a name the
+/// registrar would now refuse, which is exactly the "old registration" case.
+#[test]
+fn the_hook_quotes_a_registration_path_with_a_quote_in_it() {
+    let sandbox = Sandbox::new("shell-quoting");
+    sandbox
+        .run(&["add", &sandbox.jdk.display().to_string()])
+        .succeeds();
+
+    // A name that could close a double-quoted literal, as an old registration
+    // might carry. It cannot be created through jenv any more, so it is
+    // placed by hand.
+    let hostile = r#"21";touch PWNED;#"#;
+    std::os::unix::fs::symlink(&sandbox.jdk, sandbox.registered(hostile)).unwrap();
+
+    // The name reaches `render` the way the hook does, and the literal it
+    // produces must be a single-quoted one: a `"` inside single quotes is
+    // inert, so the danger is a *bare* quote outside them.
+    let path = sandbox.registered(hostile);
+    let line = jenv::cmd::quote::shell_quote("bash", &path.display().to_string());
+    assert!(line.starts_with('\'') && line.ends_with('\''), "{line}");
+    assert!(!line.starts_with('"'), "literal left closeable:\n{line}");
+
+    // A real shell evaluating it must see the literal path, not run anything.
+    let script = format!("V={line}\nprintf '%s' \"$V\"");
+    let out = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(&script)
+        .current_dir(sandbox.project())
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        path.display().to_string()
+    );
+    assert!(!sandbox.project().join("PWNED").exists());
+}
+
+/// The prompt hook is the dangerous path: it runs on every prompt, and its
+/// value comes from `.java-version` in the current directory — a file that
+/// arrives with a cloned repository. Both defences are exercised here: the
+/// file cannot name a hostile version, and even a hostile registration cannot
+/// turn into code.
+#[test]
+fn the_export_hook_does_not_execute_a_hostile_version_file() {
+    let sandbox = Sandbox::new("export-injection");
+    sandbox
+        .run(&["add", &sandbox.jdk.display().to_string()])
+        .succeeds();
+
+    // A name that is registered *and* a file that names it. The registration
+    // is by hand, standing in for one from an older jenv.
+    let hostile = r#"21";touch PWNED;#"#;
+    std::os::unix::fs::symlink(&sandbox.jdk, sandbox.registered(hostile)).unwrap();
+    std::fs::write(
+        sandbox.project().join(".java-version"),
+        format!("{hostile}\n"),
+    )
+    .unwrap();
+
+    let code = sandbox.spawn_text(&["export-hook"]);
+
+    // The hook reads the file, finds a name it cannot accept, and stays quiet
+    // rather than publishing it — or anything derived from it.
+    assert!(
+        !code.contains("PWNED"),
+        "the hostile name reached the output:\n{code}"
+    );
+
+    // Evaluating whatever it did print, as the shell does, must not run it.
+    let script = format!("{code}\nexit 0");
+    let mut command = Command::new("/bin/sh");
+    command
+        .arg("-c")
+        .arg(&script)
+        .current_dir(sandbox.project())
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin");
+    let _ = command.output().unwrap();
+
+    assert!(
+        !sandbox.project().join("PWNED").exists(),
+        "the prompt hook executed the payload"
+    );
+}
+
+/// The version file is the other half of that path, and the check there is
+/// that a name the registrar would refuse is not honoured from a file either.
+#[test]
+fn a_hostile_version_file_is_not_honoured() {
+    let sandbox = Sandbox::new("hostile-file");
+    sandbox
+        .run(&["add", &sandbox.jdk.display().to_string()])
+        .succeeds();
+
+    // A line that would be a second shell statement if it were carried
+    // through; only the first line is a version name.
+    std::fs::write(sandbox.project().join(".java-version"), "21\ntouch PWNED\n").unwrap();
+
+    sandbox.run(&["version-name"]).succeeds().stdout_is("21");
+    assert!(!sandbox.project().join("PWNED").exists());
 }
 
 // --------------------------------------------------------------- rehash
@@ -961,6 +1167,61 @@ fn exec_prepends_options_to_the_tools_arguments() {
         .stdout_is("-Xmx1g -Dx=a b App");
 }
 
+/// A `.java-options` file is an argument list, not a version name: it may hold
+/// several lines, and a line may legitimately contain quotes. Reading it with
+/// the version-name rule (and that rule trims to the first line) silently
+/// dropped every option but the first.
+#[test]
+fn options_read_every_line_of_a_multi_line_file() {
+    let sandbox = Sandbox::new("options-multiline");
+    sandbox
+        .run(&["add", &sandbox.jdk.display().to_string()])
+        .succeeds();
+    sandbox.run(&["local", "21"]).succeeds();
+    std::fs::write(
+        sandbox.project().join(".java-options"),
+        "-Xmx1g\n-XX:+UseG1GC\n-XX:OnOutOfMemoryError=\"kill -9 %p\"\n",
+    )
+    .unwrap();
+
+    sandbox
+        .run(&["options"])
+        .succeeds()
+        .stdout_is("-Xmx1g\n-XX:+UseG1GC\n-XX:OnOutOfMemoryError=\"kill -9 %p\"");
+
+    // And `exec` sees all three, not just the first.
+    write_script(&sandbox.jdk.join("bin").join("java"), "echo \"$*\"");
+    sandbox
+        .run(&["exec", "java", "App"])
+        .succeeds()
+        .stdout_is("-Xmx1g -XX:+UseG1GC -XX:OnOutOfMemoryError=kill -9 %p App");
+}
+
+/// A relative `$JENV_DIR` is relative to the working directory, and the lookup
+/// for `.java-options` has to climb from there. Making the path absolute is
+/// necessary (`Path::parent` on a bare `.` stops at itself) but must not stop
+/// the walk at the first directory either.
+#[test]
+fn options_walk_up_from_a_relative_jenv_dir() {
+    let sandbox = Sandbox::new("options-rel-dir");
+    sandbox
+        .run(&["add", &sandbox.jdk.display().to_string()])
+        .succeeds();
+    sandbox.run(&["local", "21"]).succeeds();
+    std::fs::write(
+        sandbox.project().join(".java-options"),
+        "-Xmx1g\n-XX:+UseG1GC\n",
+    )
+    .unwrap();
+
+    // Run from a subdirectory with `JENV_DIR` one level up, relatively. The
+    // walk has to make that absolute and then keep climbing from there.
+    let deeper = sandbox.project().join("deeper");
+    std::fs::create_dir_all(&deeper).unwrap();
+    let out = sandbox.spawn_text_in(&deeper, &[("JENV_DIR", "..")], &["options"]);
+    assert_eq!(out.trim_end(), "-Xmx1g\n-XX:+UseG1GC");
+}
+
 #[test]
 fn exec_reports_a_command_that_no_version_provides() {
     let sandbox = Sandbox::new("exec-missing");
@@ -1076,16 +1337,13 @@ fn the_export_hook_publishes_java_home_and_jdk_home_for_a_jdk() {
     let hook = sandbox.spawn_text(&["export-hook"]);
     let home = sandbox.registered("21").display().to_string();
     assert!(
-        hook.contains(&format!("export JAVA_HOME=\"{home}\"")),
+        hook.contains(&format!("export JAVA_HOME='{home}'")),
         "{hook}"
     );
-    assert!(
-        hook.contains("export JENV_FORCEJAVAHOME=\"true\""),
-        "{hook}"
-    );
+    assert!(hook.contains("export JENV_FORCEJAVAHOME='true'"), "{hook}");
     // javac is present, so this is a JDK and JDK_HOME is published too.
     assert!(hook.contains("export JDK_HOME="), "{hook}");
-    assert!(hook.contains("export JENV_FORCEJDKHOME=\"true\""), "{hook}");
+    assert!(hook.contains("export JENV_FORCEJDKHOME='true'"), "{hook}");
 }
 
 #[test]
@@ -1108,7 +1366,7 @@ fn the_export_hook_clears_java_home_for_a_jre_and_for_system() {
     );
     assert!(
         stale.contains(&format!(
-            "export JAVA_HOME=\"{}\"",
+            "export JAVA_HOME='{}'",
             sandbox.registered("21").display()
         )),
         "{stale}"
@@ -1144,7 +1402,7 @@ fn the_export_hook_repoints_jdk_home_when_the_version_moves() {
     );
     let home = sandbox.registered("21").display().to_string();
     assert!(
-        hook.contains(&format!("export JDK_HOME=\"{home}\"")),
+        hook.contains(&format!("export JDK_HOME='{home}'")),
         "{hook}"
     );
 }

@@ -52,13 +52,32 @@ pub fn registered_path(layout: &Layout, name: &str) -> PathBuf {
 /// so an unchecked name reaches `remove_dir_all` and can take the whole tree
 /// with it. `jenv remove "$V"` in a script with `V` unset is the ordinary way
 /// to get there.
-fn valid_name(name: &str) -> bool {
+///
+/// The name also ends up inside shell code: `jenv shell` and the `export-hook`
+/// prompt hook print a line the parent shell evaluates, and the value is a
+/// version name. `cmd::quote` escapes it for whichever shell will read it, but
+/// this is the cheaper of the two defences — it stops a hostile name from ever
+/// being registered, and the quoting covers the names that already are.
+/// Refusing the quoting characters outright is right for a version name: no
+/// JDK is called `21"; rm -rf ~`.
+pub fn valid_name(name: &str) -> bool {
     !name.is_empty()
         && name != "."
         && name != ".."
         && !name.contains('/')
         && !name.contains('\\')
         && !name.contains('\0')
+        && !name.contains('"')
+        && !name.contains('\'')
+        && !name.contains('`')
+        && !name.contains('$')
+        && !name.contains(';')
+        && !name.contains('&')
+        && !name.contains('|')
+        && !name.contains('<')
+        && !name.contains('>')
+        && !name.contains('\n')
+        && !name.contains('\r')
 }
 
 /// Resolve `versions/<name>` to the JDK home directory it ultimately points at.
@@ -185,5 +204,33 @@ mod tests {
         assert_eq!(list(&layout), vec!["21".to_string()]);
 
         std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    /// A version name is pasted into shell code by `jenv shell` and the prompt
+    /// hook, so the characters that could close a string are refused here —
+    /// the cheaper of the two defences, since it stops the name existing at
+    /// all. Everything a real JDK is called must still be accepted.
+    #[test]
+    fn valid_name_refuses_shell_metacharacters() {
+        for hostile in [
+            r#"x"; touch PWNED; #"#,
+            "x'; touch PWNED; #",
+            "x`id`",
+            "x$(id)",
+            "x;id",
+            "x&&id",
+            "x|id",
+            "x>PWNED",
+            "x<PWNED",
+            "x\ny",
+            "x\ry",
+        ] {
+            assert!(!valid_name(hostile), "should be refused: {hostile:?}");
+        }
+
+        // And the names jenv actually registers still pass.
+        for ok in ["21", "21.0.2.13", "temurin64-21.0.2", "1.8.0.292", "my-jdk"] {
+            assert!(valid_name(ok), "should be allowed: {ok:?}");
+        }
     }
 }

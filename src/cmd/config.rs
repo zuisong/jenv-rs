@@ -16,7 +16,7 @@ pub fn global(layout: &Layout, requested: Option<String>, unset: bool) -> Result
     }
 
     let Some(requested) = requested else {
-        return match version::read_version_file(&file) {
+        return match version::read_name_file(&file) {
             Some(name) => {
                 println!("{name}");
                 Ok(())
@@ -43,7 +43,7 @@ pub fn local(layout: &Layout, requested: Option<String>, unset: bool) -> Result<
 
     let Some(requested) = requested else {
         for file in [&java_version, &legacy] {
-            if let Some(name) = version::read_version_file(file) {
+            if let Some(name) = version::read_name_file(file) {
                 println!("{name}");
                 return Ok(());
             }
@@ -53,7 +53,7 @@ pub fn local(layout: &Layout, requested: Option<String>, unset: bool) -> Result<
 
     // A `.jenv-version` in the way gets migrated rather than silently
     // shadowed, so a project that predates `.java-version` keeps working.
-    if version::read_version_file(&legacy).is_some() {
+    if version::read_name_file(&legacy).is_some() {
         std::fs::remove_file(&legacy).map_err(|e| format!("jenv: {e}"))?;
         eprintln!("jenv: removed existing `.jenv-version' file and migrated");
         eprintln!("       local version specification to `.java-version' file");
@@ -99,11 +99,20 @@ pub fn shell(layout: &Layout, requested: Option<String>, unset: bool) -> Result<
     println!(
         "{}",
         match shell.as_str() {
-            "fish" => format!("set -gx JENV_VERSION \"{requested}\""),
+            "fish" => format!(
+                "set -gx JENV_VERSION {}",
+                super::quote::shell_quote(&shell, &requested)
+            ),
             // PowerShell has no `export`; this line goes straight into
             // Invoke-Expression, so POSIX syntax would throw on every use.
-            "powershell" => format!("$env:JENV_VERSION = \"{requested}\""),
-            _ => format!("export JENV_VERSION=\"{requested}\""),
+            "powershell" => format!(
+                "$env:JENV_VERSION = {}",
+                super::quote::shell_quote(&shell, &requested)
+            ),
+            _ => format!(
+                "export JENV_VERSION={}",
+                super::quote::shell_quote(&shell, &requested)
+            ),
         }
     );
     Ok(())
@@ -156,9 +165,18 @@ fn print_options(value: &str, origin: &str, verbose: bool) {
     }
 }
 
+/// The nearest `.java-options`, looking up from `$JENV_DIR` and then from the
+/// working directory, the way `.java-version` is looked for.
+///
+/// Both legs are made absolute first, because `Path::parent` on a bare `.`
+/// stops immediately: a relative `$JENV_DIR`, and a relative working
+/// directory, would each otherwise walk no further than themselves.
 fn options_file(layout: &Layout) -> PathBuf {
-    for start in [crate::cmd::version_cmd::jenv_dir(), PathBuf::from(".")] {
-        let mut current = Some(start);
+    let from_env = std::env::var_os("JENV_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(crate::cmd::version_cmd::jenv_dir);
+    for start in [from_env, crate::layout::cwd()] {
+        let mut current = Some(crate::layout::absolute(&start));
         while let Some(dir) = current {
             let candidate = dir.join(".java-options");
             if candidate.exists() {
