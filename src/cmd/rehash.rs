@@ -126,7 +126,9 @@ fn write_shim(source: &Path, target: &Path) -> std::io::Result<()> {
     // observes a half-written executable. The suffix is appended to the file
     // name rather than set as an extension: `with_extension` would replace
     // whatever follows the last dot, collapsing `a.b` and `a.c` onto one
-    // staging path.
+    // staging path. The dot is dropped because the staging file lands in the
+    // same directory and `.java` is a name a JDK could itself provide — a
+    // hidden file the next `rehash` would then see as a stale shim.
     let staging = target.with_file_name(format!(
         "{}.tmp-{}",
         target.file_name().unwrap_or_default().to_string_lossy(),

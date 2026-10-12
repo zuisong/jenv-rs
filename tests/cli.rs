@@ -164,7 +164,12 @@ impl Sandbox {
     /// Same, with a pre-existing environment, so the hook's "already correct,
     /// say nothing" path can be told apart from "needs changing".
     fn spawn_text_with(&self, preset: &[(&str, &str)], args: &[&str]) -> String {
-        let mut command = self.command(&self.project());
+        self.spawn_text_in(&self.project(), preset, args)
+    }
+
+    /// Same, from a chosen working directory.
+    fn spawn_text_in(&self, cwd: &Path, preset: &[(&str, &str)], args: &[&str]) -> String {
+        let mut command = self.command(cwd);
         for (name, value) in preset {
             command = command.env(name, value);
         }
@@ -392,31 +397,45 @@ fn add_refuses_an_alias_that_belongs_to_another_jdk() {
         .run(&["add", &sandbox.jdk.display().to_string()])
         .succeeds();
 
-    // `21` is a real registration for this JDK's own version. Naming a
-    // *different* JDK `21` would shadow it silently.
-    let other = sandbox.dir.join("jdk-17");
+    // The fixture registers a 21.0.2 JDK under all its names, `21.0.2`
+    // among them. Naming a *second* JDK of that same version `21.0.2` would
+    // silently repoint a name that tools and IDE configs already hold.
+    let other = sandbox.dir.join("jdk-21-other");
     std::fs::create_dir_all(other.join("bin")).unwrap();
     std::fs::write(
         other.join("release"),
-        "JAVA_VERSION=\"17.0.9\"\nIMPLEMENTOR=\"Eclipse Adoptium\"\nOS_ARCH=\"aarch64\"\n",
+        "JAVA_VERSION=\"21.0.2\"\nIMPLEMENTOR=\"Azul\"\nOS_ARCH=\"aarch64\"\n",
     )
     .unwrap();
     write_script(&other.join("bin").join("java"), "echo java");
 
-    sandbox
-        .run(&["add", "21", &other.display().to_string()])
-        .fails()
-        .contains("already taken by another JDK");
+    let registered = sandbox.registered("21.0.2");
+    assert!(registered.exists(), "the fixture registers 21.0.2");
+    let before = std::fs::read_link(&registered).unwrap();
 
-    // The real 21 is untouched, and `--force` is the documented way through.
-    assert_eq!(
-        std::fs::read_link(sandbox.registered("21")).unwrap(),
-        sandbox.jdk
-    );
     sandbox
-        .run(&["add", "--force", "21", &other.display().to_string()])
+        .run(&["add", "21.0.2", &other.display().to_string()])
+        .fails()
+        .contains("already names another JDK");
+
+    // The original registration is untouched, and `--force` is the documented
+    // way through.
+    assert_eq!(std::fs::read_link(&registered).unwrap(), before);
+    sandbox
+        .run(&["add", "--force", "21.0.2", &other.display().to_string()])
         .succeeds();
-    assert_eq!(std::fs::read_link(sandbox.registered("21")).unwrap(), other);
+    assert_eq!(std::fs::read_link(&registered).unwrap(), other);
+
+    // A name that is simply *taken* by a JDK of a different version is not a
+    // collision: naming a 17 JDK `my-17` while `my-17` holds a 21 is the
+    // ordinary rename path, which must keep working.
+    sandbox
+        .run(&["add", "my-custom", &other.display().to_string()])
+        .succeeds();
+    assert_eq!(
+        std::fs::read_link(sandbox.registered("my-custom")).unwrap(),
+        other
+    );
 }
 
 /// The guard above must not turn an ordinary re-add into an error. Naming a
@@ -1146,6 +1165,61 @@ fn exec_prepends_options_to_the_tools_arguments() {
         .run(&["exec", "java", "App"])
         .succeeds()
         .stdout_is("-Xmx1g -Dx=a b App");
+}
+
+/// A `.java-options` file is an argument list, not a version name: it may hold
+/// several lines, and a line may legitimately contain quotes. Reading it with
+/// the version-name rule (and that rule trims to the first line) silently
+/// dropped every option but the first.
+#[test]
+fn options_read_every_line_of_a_multi_line_file() {
+    let sandbox = Sandbox::new("options-multiline");
+    sandbox
+        .run(&["add", &sandbox.jdk.display().to_string()])
+        .succeeds();
+    sandbox.run(&["local", "21"]).succeeds();
+    std::fs::write(
+        sandbox.project().join(".java-options"),
+        "-Xmx1g\n-XX:+UseG1GC\n-XX:OnOutOfMemoryError=\"kill -9 %p\"\n",
+    )
+    .unwrap();
+
+    sandbox
+        .run(&["options"])
+        .succeeds()
+        .stdout_is("-Xmx1g\n-XX:+UseG1GC\n-XX:OnOutOfMemoryError=\"kill -9 %p\"");
+
+    // And `exec` sees all three, not just the first.
+    write_script(&sandbox.jdk.join("bin").join("java"), "echo \"$*\"");
+    sandbox
+        .run(&["exec", "java", "App"])
+        .succeeds()
+        .stdout_is("-Xmx1g -XX:+UseG1GC -XX:OnOutOfMemoryError=kill -9 %p App");
+}
+
+/// A relative `$JENV_DIR` is relative to the working directory, and the lookup
+/// for `.java-options` has to climb from there. Making the path absolute is
+/// necessary (`Path::parent` on a bare `.` stops at itself) but must not stop
+/// the walk at the first directory either.
+#[test]
+fn options_walk_up_from_a_relative_jenv_dir() {
+    let sandbox = Sandbox::new("options-rel-dir");
+    sandbox
+        .run(&["add", &sandbox.jdk.display().to_string()])
+        .succeeds();
+    sandbox.run(&["local", "21"]).succeeds();
+    std::fs::write(
+        sandbox.project().join(".java-options"),
+        "-Xmx1g\n-XX:+UseG1GC\n",
+    )
+    .unwrap();
+
+    // Run from a subdirectory with `JENV_DIR` one level up, relatively. The
+    // walk has to make that absolute and then keep climbing from there.
+    let deeper = sandbox.project().join("deeper");
+    std::fs::create_dir_all(&deeper).unwrap();
+    let out = sandbox.spawn_text_in(&deeper, &[("JENV_DIR", "..")], &["options"]);
+    assert_eq!(out.trim_end(), "-Xmx1g\n-XX:+UseG1GC");
 }
 
 #[test]

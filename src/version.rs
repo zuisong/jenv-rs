@@ -51,15 +51,24 @@ fn walk_up(start: &Path) -> impl Iterator<Item = PathBuf> + '_ {
     })
 }
 
-/// The version named by a version file.
-///
-/// Only the first line is read. A version file holds a version name, so
-/// anything after a newline is not part of one — and returning it would put a
-/// second line into the shell code `jenv shell` and the prompt hook print.
-/// A name that could not be registered is rejected here too, by the same rule
-/// `link::valid_name` applies, so a `.java-version` cannot name something
-/// `jenv add` would have refused.
 pub fn read_version_file(path: &Path) -> Option<String> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let trimmed = raw.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// The version named by a *version name* file.
+///
+/// A version name is one line — a second line is either a trailing newline or
+/// a second command — so only the first is read, and it is rejected unless
+/// `jenv add` would have accepted it as a name. That keeps a `.java-version`
+/// from `git clone` out of the shell code `jenv shell` and the prompt hook
+/// print.
+///
+/// Distinct from [`read_version_file`], which reads values that are not names
+/// at all: `.java-options` holds a whitespace-separated argument list, and
+/// applying the name rule to it would silently drop every option.
+pub fn read_name_file(path: &Path) -> Option<String> {
     let raw = std::fs::read_to_string(path).ok()?;
     let name = raw.lines().next().unwrap_or_default().trim();
     (!name.is_empty() && crate::link::valid_name(name)).then(|| name.to_string())
@@ -95,7 +104,7 @@ pub fn select(layout: &Layout) -> Result<Selection, String> {
     }
 
     let origin = file.display().to_string();
-    let name = read_version_file(&file).unwrap_or_else(|| "system".into());
+    let name = read_name_file(&file).unwrap_or_else(|| "system".into());
     if name == "system" {
         return Ok(Selection {
             version: Version::System,
@@ -188,7 +197,7 @@ mod tests {
         let read = |body: &str| {
             let path = tmp.join(".java-version");
             std::fs::write(&path, body).unwrap();
-            read_version_file(&path)
+            read_name_file(&path)
         };
 
         assert_eq!(read("21\n"), Some("21".into()));
@@ -199,6 +208,12 @@ mod tests {
         assert_eq!(read("\n"), None);
         assert_eq!(read("   "), None);
         assert_eq!(read(r#"x"; touch PWNED; #"#), None);
+        // A newline splits the file; the first line is the name, and it is
+        // then refused on its own merits. Only a name containing a newline is
+        // dangerous, and a name can no longer contain one.
+        assert_eq!(read("21\ntouch PWNED\n"), Some("21".into()));
+        assert_eq!(read("21;id\ntouch PWNED\n"), None);
+        assert!(!crate::link::valid_name("21\ntouch PWNED"));
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

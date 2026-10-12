@@ -19,21 +19,20 @@ pub fn add(layout: &Layout, target: &[String], force: bool) -> Result<(), String
 
     let jdk = probe::probe(&path)?;
 
-    // A caller-supplied name is otherwise taken on trust, but it must not read
-    // as *another* JDK's separate installation: registering a 17 JDK as `21`
-    // would shadow the real 21 without saying so. Two cases are not a
-    // collision and must keep working — the JDK's own canonical name (the
-    // supported way to rename a JDK whose banner is misidentified), and an
-    // alias already pointing at this same home, which makes re-running `add`
-    // idempotent rather than an error. `--force` overrides the rest, matching
-    // the prompt the interactive path would have shown.
+    // A caller-supplied name is otherwise taken on trust, but registering a
+    // 17 JDK as `21` would shadow the real 21 without saying so. The signal is
+    // the version the JDK reports, not the name it is being given: a name that
+    // is merely already *taken* is the ordinary re-add and rename path, which
+    // the interactive prompt below already handles. `--force` overrides both.
     if let Some(name) = alias.as_deref()
         && !force
-        && name != jdk.alias()
-        && link::home_of(layout, name).is_some_and(|existing| existing != jdk.home)
+        && let Some(existing) = link::home_of(layout, name)
+        && existing != jdk.home
+        && probe::probe(&existing).is_ok_and(|occupied| occupied.version == jdk.version)
     {
         return Err(format!(
-            "jenv: `{name}' is already taken by another JDK; pass --force to override"
+            "jenv: `{name}' already names another JDK of version {}; pass --force to override",
+            jdk.version
         ));
     }
 
