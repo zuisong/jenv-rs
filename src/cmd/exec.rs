@@ -1,7 +1,7 @@
 use crate::layout::Layout;
 use crate::link::Version;
-use crate::proc;
 use crate::version;
+use crate::{path, process};
 use std::collections::HashMap;
 
 /// `jenv exec <command> [args...]`
@@ -17,7 +17,7 @@ pub fn exec(layout: &Layout, argv: &[String]) -> Result<(), String> {
     let selection = version::select(layout)?;
     let path = crate::cmd::which::resolve(layout, command)?;
 
-    if !proc::is_executable(&path) {
+    if !path::is_executable(&path) {
         // Returned, not printed: the caller prints it, and printing here too
         // would say it twice.
         return Err(format!("jenv: {command}: command not found"));
@@ -53,7 +53,7 @@ pub fn exec(layout: &Layout, argv: &[String]) -> Result<(), String> {
 
     let options = env.get("JENV_OPTIONS").cloned().unwrap_or_default();
 
-    let mut process = proc::command_with_argv0(&path, command);
+    let mut process = process::command_with_argv0(&path, command);
     for (name, value) in &env {
         process.env(name, value);
     }
@@ -62,7 +62,7 @@ pub fn exec(layout: &Layout, argv: &[String]) -> Result<(), String> {
     }
     process.args(args);
 
-    let err = proc::exec_replace(process);
+    let err = process::exec_replace(process);
     Err(format!("jenv: {command}: {err}"))
 }
 

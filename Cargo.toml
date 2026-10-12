@@ -20,6 +20,7 @@ path = "src/bin/jenv.rs"
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
+symlink = "0.1.0"
 
 # Rust sets SIGPIPE to SIG_IGN, which turns `jenv version-name | head -1` into
 # a panic instead of the quiet exit every other Unix tool does.

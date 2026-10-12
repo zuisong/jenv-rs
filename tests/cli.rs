@@ -99,7 +99,7 @@ impl Sandbox {
         format!(
             "{}{}{}",
             self.root.join("bin").display(),
-            jenv::proc::SEPARATOR,
+            jenv::path::SEPARATOR,
             env_path()
         )
     }
@@ -887,7 +887,7 @@ fn the_hook_quotes_a_registration_path_with_a_quote_in_it() {
     // might carry. It cannot be created through jenv any more, so it is
     // placed by hand.
     let hostile = r#"21";touch PWNED;#"#;
-    std::os::unix::fs::symlink(&sandbox.jdk, sandbox.registered(hostile)).unwrap();
+    symlink::symlink_dir(&sandbox.jdk, sandbox.registered(hostile)).unwrap();
 
     // The name reaches `render` the way the hook does, and the literal it
     // produces must be a single-quoted one: a `"` inside single quotes is
@@ -927,7 +927,7 @@ fn the_export_hook_does_not_execute_a_hostile_version_file() {
     // A name that is registered *and* a file that names it. The registration
     // is by hand, standing in for one from an older jenv.
     let hostile = r#"21";touch PWNED;#"#;
-    std::os::unix::fs::symlink(&sandbox.jdk, sandbox.registered(hostile)).unwrap();
+    symlink::symlink_dir(&sandbox.jdk, sandbox.registered(hostile)).unwrap();
     std::fs::write(
         sandbox.project().join(".java-version"),
         format!("{hostile}\n"),
@@ -1458,7 +1458,7 @@ fn the_install_location_does_not_matter_as_long_as_it_is_on_path() {
             format!(
                 "{}{}{}",
                 elsewhere.display(),
-                jenv::proc::SEPARATOR,
+                jenv::path::SEPARATOR,
                 env_path()
             ),
         )

@@ -1,6 +1,6 @@
 use crate::layout::Layout;
 use crate::link::Version;
-use crate::proc;
+use crate::path;
 use crate::version;
 use std::path::PathBuf;
 
@@ -11,8 +11,8 @@ use std::path::PathBuf;
 /// would the system JDK do" has to ask the system, and `resolve` would
 /// otherwise hand back the selected version's `bin/`.
 pub fn resolve_system(layout: &Layout, command: &str) -> Option<PathBuf> {
-    let dirs = proc::path_without(&layout.shims_dir(), &proc::path_dirs());
-    proc::which_in_path(command, &dirs)
+    let dirs = path::path_without(&layout.shims_dir(), &path::path_dirs());
+    path::which_in_path(command, &dirs)
 }
 
 /// Is there a java reachable without going through jenv's shims?
@@ -32,16 +32,16 @@ pub fn resolve(layout: &Layout, command: &str) -> Result<PathBuf, String> {
     let mut found = match &selection.version {
         Version::Installed { name, .. } => {
             let bin = crate::link::registered_path(layout, name).join("bin");
-            proc::executable_names(&bin.join(command))
+            path::executable_names(&bin.join(command))
                 .into_iter()
-                .find(|candidate| proc::is_executable(candidate))
+                .find(|candidate| path::is_executable(candidate))
         }
         Version::System => None,
     };
 
     if found.is_none() {
-        let dirs = proc::path_without(&layout.shims_dir(), &proc::path_dirs());
-        found = proc::which_in_path(command, &dirs);
+        let dirs = path::path_without(&layout.shims_dir(), &path::path_dirs());
+        found = path::which_in_path(command, &dirs);
     }
 
     Ok(found.unwrap_or_else(|| PathBuf::from(command)))
@@ -49,7 +49,7 @@ pub fn resolve(layout: &Layout, command: &str) -> Result<PathBuf, String> {
 
 pub fn which(layout: &Layout, command: &str) -> Result<(), String> {
     match resolve(layout, command) {
-        Ok(path) if proc::is_executable(&path) => {
+        Ok(path) if path::is_executable(&path) => {
             println!("{}", path.display());
             Ok(())
         }
@@ -78,9 +78,9 @@ pub fn whence(layout: &Layout, command: &str) -> Vec<String> {
         let Some(home) = crate::link::home_of(layout, &name) else {
             continue;
         };
-        let found = proc::executable_names(&home.join("bin").join(command))
+        let found = path::executable_names(&home.join("bin").join(command))
             .into_iter()
-            .any(|candidate| proc::is_executable(&candidate));
+            .any(|candidate| path::is_executable(&candidate));
         if found {
             names.push(name);
         }

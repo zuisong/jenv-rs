@@ -1,9 +1,11 @@
+pub mod binary;
 pub mod cli;
 pub mod cmd;
 pub mod layout;
 pub mod link;
+pub mod path;
 pub mod probe;
-pub mod proc;
+pub mod process;
 pub mod shim;
 pub mod version;
 

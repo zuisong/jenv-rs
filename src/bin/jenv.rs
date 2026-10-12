@@ -2,25 +2,24 @@ use clap::Parser;
 use jenv::cli::{Cli, Command, Failure};
 use jenv::cmd;
 use jenv::layout::Layout;
+use jenv::process;
 use jenv::shim;
 
 /// The internal subcommand the installed prompt hook evaluates.
 const EXPORT_HOOK: &str = "export-hook";
 
 fn main() {
+    // A tool whose output is piped into `head` has to die quietly, the way
+    // every other Unix program does. Rust ignores SIGPIPE by default, which
+    // would turn a closed pipe into a panic. Done first, so it covers the
+    // shim path below as well as the CLI.
+    process::restore_default_sigpipe();
+
     // One binary, two jobs. `jenv rehash` hard-links this executable into
     // `shims/` under every command name, so the file name is what says
     // whether this is the CLI or a shim standing in for `java`.
     if let Some(tool) = shim::tool_name() {
         shim::run(&tool);
-    }
-
-    // A tool whose output is piped into `head` has to die quietly, the way
-    // every other Unix program does. Rust ignores SIGPIPE by default, which
-    // would turn a closed pipe into a panic.
-    #[cfg(unix)]
-    unsafe {
-        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
 
     let layout = Layout::from_env();

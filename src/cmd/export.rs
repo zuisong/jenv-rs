@@ -1,6 +1,6 @@
 use crate::layout::Layout;
 use crate::link::Version;
-use crate::version;
+use crate::{path, version};
 
 /// `jenv javahome`
 ///
@@ -105,7 +105,7 @@ fn render(shell: &str, var: &str, value: Option<&str>) -> Option<String> {
 }
 
 fn has_javac(home: &std::path::Path) -> bool {
-    crate::proc::executable_names(&home.join("bin").join("javac"))
+    path::executable_names(&home.join("bin").join("javac"))
         .iter()
-        .any(|candidate| crate::proc::is_executable(candidate))
+        .any(|candidate| path::is_executable(candidate))
 }

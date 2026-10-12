@@ -1,6 +1,6 @@
 use crate::layout::{self, Layout, SHIM_VERSION};
 use crate::link;
-use crate::proc;
+use crate::{binary, path};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -47,10 +47,7 @@ pub fn rehash(layout: &Layout, force: bool) -> Result<(), String> {
         created += 1;
     }
 
-    let kept: BTreeSet<String> = wanted
-        .iter()
-        .map(|name| crate::proc::file_name(name))
-        .collect();
+    let kept: BTreeSet<String> = wanted.iter().map(|name| binary::file_name(name)).collect();
     for stale in existing_shim_files(&shims_dir) {
         if !kept.contains(&stale) {
             let _ = std::fs::remove_file(shims_dir.join(&stale));
@@ -69,7 +66,7 @@ pub fn rehash(layout: &Layout, force: bool) -> Result<(), String> {
 }
 
 fn shim_path(shims_dir: &Path, name: &str) -> PathBuf {
-    shims_dir.join(crate::proc::file_name(name))
+    shims_dir.join(binary::file_name(name))
 }
 
 /// Every executable in a JDK's `bin/`, keyed by the name a shim will carry.
@@ -80,7 +77,7 @@ fn executables_in(bin: &Path) -> BTreeSet<String> {
 
     entries
         .flatten()
-        .filter(|entry| proc::is_executable(&entry.path()))
+        .filter(|entry| path::is_executable(&entry.path()))
         .filter_map(|entry| {
             let name = entry.file_name().to_string_lossy().to_string();
             let stem = if cfg!(windows) {

@@ -40,13 +40,6 @@ pub fn tool_name() -> Option<String> {
 /// implementation spent a dozen bash interpreters per `java` invocation
 /// before this.
 pub fn run(tool: &str) -> ! {
-    // The shim inherits stdout from the tool it dispatches to, so a tool piped
-    // into `head` must still get the normal Unix behaviour.
-    #[cfg(unix)]
-    unsafe {
-        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
-    }
-
     let mut argv = Vec::with_capacity(std::env::args().count());
     argv.push(tool.to_string());
     argv.extend(std::env::args().skip(1));

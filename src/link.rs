@@ -1,10 +1,10 @@
 //! The registry of installed versions.
 //!
-//! `jenv` stores each version as a symlink at `versions/<name>`. Windows
-//! cannot create symlinks without an elevated token or developer mode, so
-//! there a version is stored as a regular UTF-8 file whose sole content is the
-//! absolute path of the JDK home. Both forms resolve through [`Version::home`],
-//! which is the only place that knows about the difference.
+//! `jenv` stores each version as a symlink at `versions/<name>`; a registration
+//! that cannot be a symlink is an error. [`home_of`] also reads an older form:
+//! a regular UTF-8 file whose whole content is the absolute path of the JDK
+//! home. Nothing writes that form any more, but registrations made by hand or
+//! by an earlier build still resolve through it.
 
 use crate::layout::{Layout, absolute};
 use std::path::{Path, PathBuf};
@@ -121,21 +121,7 @@ pub fn register(layout: &Layout, name: &str, home: &Path) -> std::io::Result<()>
     std::fs::create_dir_all(layout.versions_dir())?;
     let entry = layout.versions_dir().join(name);
     remove(&entry)?;
-    link_entry(home, &entry)
-}
-
-#[cfg(unix)]
-fn link_entry(home: &Path, entry: &Path) -> std::io::Result<()> {
-    std::os::unix::fs::symlink(home, entry)
-}
-
-#[cfg(windows)]
-fn link_entry(home: &Path, entry: &Path) -> std::io::Result<()> {
-    // A symlink keeps the two platforms byte-identical, but creating one needs
-    // developer mode or an elevated token. Falling back to a file whose whole
-    // content is the path needs neither, and `home_of` reads both.
-    std::os::windows::fs::symlink_dir(home, entry)
-        .or_else(|_| std::fs::write(entry, home.to_string_lossy().as_bytes()))
+    symlink::symlink_dir(home, &entry)
 }
 
 pub fn unregister(layout: &Layout, name: &str) -> std::io::Result<()> {
