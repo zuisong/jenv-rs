@@ -33,18 +33,19 @@ pub fn version(layout: &Layout) -> Result<(), String> {
 }
 
 pub fn versions(layout: &Layout, bare: bool, verbose: bool) -> Result<(), String> {
-    let current = if bare {
-        String::new()
-    } else {
-        version::select(layout)
-            .map(|s| s.version.name().to_string())
-            .unwrap_or_default()
-    };
-    let current_origin = if current.is_empty() {
+    // One resolution, not two. `select` warns on stderr when it forgives a
+    // `java-` prefix, so resolving twice printed that warning twice — and a
+    // listing has no business resolving anything in `--bare` mode at all.
+    let selected = if bare {
         None
     } else {
-        version::select(layout).ok().map(|s| s.origin)
+        version::select(layout).ok()
     };
+    let current = selected
+        .as_ref()
+        .map(|s| s.version.name().to_string())
+        .unwrap_or_default();
+    let current_origin = selected.map(|s| s.origin);
 
     // In bare mode the output is a plain list for scripts to consume, so the
     // `*` marker and its padding both have to go.

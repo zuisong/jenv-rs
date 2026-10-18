@@ -1993,3 +1993,29 @@ fn a_registration_with_a_missing_target_is_visible_and_diagnosable() {
     // `21.0` also contains "21", so compare whole lines.
     assert!(!after.lines().contains(&"21"), "{:?}", after.lines());
 }
+
+/// `versions` used to resolve the active version twice — once for the name and
+/// again for the origin — and `select` is not a pure read: it warns on stderr
+/// when it forgives a `java-` prefix. So every such warning was printed twice.
+/// A listing resolves once, and `--bare` resolves not at all.
+#[test]
+fn versions_resolves_the_active_version_once() {
+    let sandbox = Sandbox::new("versions-single-resolve");
+    sandbox
+        .run(&["add", &sandbox.jdk.display().to_string()])
+        .succeeds();
+    // The legacy spelling `java-21` is forgiven with a warning, which is the
+    // only observable thing a second resolution does.
+    std::fs::write(sandbox.root.join("version"), "java-21\n").unwrap();
+
+    let run = sandbox.run(&["versions"]).succeeds();
+    let warnings = run.stderr.matches("warning: ignoring extraneous").count();
+    assert_eq!(warnings, 1, "expected one warning, got {warnings}:\n{}", run.stderr);
+    // And it still names the version it resolved to, not the spelling it read.
+    assert!(run.stdout.contains("* 21"), "{}", run.stdout);
+
+    // `--bare` is for scripts: no marker, and nothing to resolve.
+    let bare = sandbox.run(&["versions", "--bare"]).succeeds();
+    assert_eq!(bare.stderr.matches("warning: ignoring extraneous").count(), 0);
+    assert!(!bare.stdout.contains('*'), "{}", bare.stdout);
+}
