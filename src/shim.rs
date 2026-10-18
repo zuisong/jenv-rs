@@ -44,8 +44,9 @@ pub fn run(tool: &str) -> ! {
     argv.push(std::ffi::OsString::from(tool));
     argv.extend(std::env::args_os().skip(1));
 
-    let layout = crate::layout::Layout::from_env();
-    if let Err(message) = crate::cmd::exec::exec(&layout, &argv) {
+    let env = crate::env::Env::process();
+    let layout = crate::layout::Layout::from_env(&env);
+    if let Err(message) = crate::cmd::exec::exec(&layout, &env, &argv) {
         eprintln!("{message}");
         std::process::exit(1);
     }

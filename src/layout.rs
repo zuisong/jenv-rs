@@ -3,7 +3,6 @@
 use std::path::{Path, PathBuf};
 
 pub const SHIM_VERSION: u8 = 1;
-
 /// Name of the file inside `shims/` that records which generation of the shim
 /// binary the existing shims were generated from. Bumping `SHIM_VERSION` and
 /// re-running `jenv rehash` rewrites every shim; the cost is one byte read
@@ -15,19 +14,27 @@ pub struct Layout {
 }
 
 impl Layout {
-    pub fn from_env() -> Self {
-        let root = match std::env::var_os("JENV_ROOT") {
+    pub fn from_env(env: &crate::env::Env) -> Self {
+        let root = match env.var("JENV_ROOT") {
             Some(v) if !v.is_empty() => PathBuf::from(v),
-            _ => home_dir().join(".jenv"),
+            _ => env.home_dir().join(".jenv"),
         };
-        Self { root }
+        // Absolute and lexically normal at construction, so every path derived
+        // from `root` is too and no consumer has to spell out "relative to
+        // what". A relative `$JENV_ROOT` is resolved against the working
+        // directory once, here, rather than at each of a dozen call sites.
+        Self {
+            root: env.absolute(&root),
+        }
     }
 
     /// A layout rooted somewhere other than `$JENV_ROOT`, for tests that need
     /// a directory of their own.
     #[cfg(test)]
     pub fn with_root(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self {
+            root: normalize(&root.into()),
+        }
     }
 
     pub fn versions_dir(&self) -> PathBuf {
@@ -62,61 +69,6 @@ impl Layout {
         std::fs::create_dir_all(self.versions_dir())?;
         Ok(())
     }
-}
-
-pub fn home_dir() -> PathBuf {
-    #[cfg(windows)]
-    {
-        if let Some(p) = std::env::var_os("USERPROFILE").filter(|v| !v.is_empty()) {
-            return PathBuf::from(p);
-        }
-        let drive = std::env::var_os("HOMEDRIVE").unwrap_or_default();
-        let path = std::env::var_os("HOMEPATH").unwrap_or_default();
-        if !drive.is_empty() || !path.is_empty() {
-            return PathBuf::from(format!(
-                "{}{}",
-                drive.to_string_lossy(),
-                path.to_string_lossy()
-            ));
-        }
-    }
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-}
-
-/// Canonicalize without requiring the path to exist, and without the
-/// `cd`-based dance the shell version needs.
-pub fn absolute(p: &Path) -> PathBuf {
-    if p.is_absolute() {
-        return normalize(p);
-    }
-    match std::env::current_dir() {
-        Ok(cwd) => normalize(&cwd.join(p)),
-        Err(_) => p.to_path_buf(),
-    }
-}
-
-/// The working directory, spelled the way a user would.
-///
-/// `current_dir` resolves every symlink, so a shell sitting in a symlinked
-/// directory reports a different path than `jenv version-origin` used to. The
-/// shell's `pwd` reads `$PWD` instead, so that is what is reported here — but
-/// only when it still names this directory, because `$PWD` is inherited and can
-/// be stale. A wrong `$PWD` falls back to the resolved path rather than
-/// inventing a file that is not there.
-pub fn cwd() -> PathBuf {
-    let resolved = std::env::current_dir().unwrap_or_default();
-    match std::env::var_os("PWD") {
-        Some(pwd) if !pwd.is_empty() => {
-            let logical = PathBuf::from(pwd);
-            if std::fs::canonicalize(&logical).ok().as_deref() == Some(resolved.as_path()) {
-                return logical;
-            }
-        }
-        _ => {}
-    }
-    resolved
 }
 
 /// Lexically remove `.` and `..` components. `std::fs::canonicalize` would do

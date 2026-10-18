@@ -9,14 +9,6 @@ use std::path::{Path, PathBuf};
 /// The platform's `PATH` separator.
 pub const SEPARATOR: char = if cfg!(windows) { ';' } else { ':' };
 
-/// The directories on `PATH`, split and ready to search.
-pub fn path_dirs() -> Vec<PathBuf> {
-    match std::env::var_os("PATH") {
-        Some(value) => std::env::split_paths(&value).collect(),
-        None => Vec::new(),
-    }
-}
-
 /// The first `PATH` entry that provides `name`, with each directory expanded
 /// to a real path so that symlinked prefixes (notably `/tmp` on macOS, and
 /// every Windows junction) compare equal.

@@ -1,3 +1,4 @@
+use crate::env::Env;
 use crate::layout::Layout;
 use crate::link::Version;
 use crate::{path, version};
@@ -7,8 +8,8 @@ use crate::{path, version};
 /// The path the active version is registered under, not the resolved JDK home:
 /// tools that write `JAVA_HOME` into a config file should see the stable
 /// `versions/<name>` path, the same way jenv's own `javahome` does.
-pub fn javahome(layout: &Layout) -> Result<(), String> {
-    match version::select(layout)?.version {
+pub fn javahome(layout: &Layout, env: &Env) -> Result<(), String> {
+    match version::select(layout, env)?.version {
         // The registration path, like `jenv prefix` and jenv's own
         // `jenv javahome`: the export plugin puts this straight into
         // JAVA_HOME, and a value that survives the JDK being re-registered
@@ -31,12 +32,12 @@ pub fn javahome(layout: &Layout) -> Result<(), String> {
 ///
 /// Printing nothing when nothing changed keeps the per-prompt cost to the
 /// subprocess this binary already costs, and makes `eval` a no-op.
-pub fn export_hook(layout: &Layout) -> Result<(), String> {
-    let shell = crate::cmd::version_cmd::jenv_shell();
+pub fn export_hook(layout: &Layout, env: &Env) -> Result<(), String> {
+    let shell = env.shell();
 
     // A version that cannot be resolved leaves the environment alone rather
     // than clearing JAVA_HOME, which would be worse than being stale.
-    let selected = match version::select(layout).ok() {
+    let selected = match version::select(layout, env).ok() {
         Some(selection) => selection.version,
         None => return Ok(()),
     };

@@ -1,3 +1,4 @@
+use crate::env::Env;
 use crate::layout::Layout;
 use crate::link;
 use crate::version;
@@ -39,8 +40,15 @@ pub fn global(layout: &Layout, requested: Option<String>, unset: bool) -> Result
 }
 
 /// `jenv local [version]`
-pub fn local(layout: &Layout, requested: Option<String>, unset: bool) -> Result<(), String> {
-    let cwd = std::env::current_dir().map_err(|e| format!("jenv: {e}"))?;
+pub fn local(
+    layout: &Layout,
+    env: &Env,
+    requested: Option<String>,
+    unset: bool,
+) -> Result<(), String> {
+    // The physical directory, not `env.cwd()`: a `.java-version` written where
+    // the filesystem says we are is what every later process will read.
+    let cwd = env.physical_cwd().to_path_buf();
     let java_version = cwd.join(".java-version");
     let legacy = cwd.join(".jenv-version");
 
@@ -80,8 +88,13 @@ pub fn local(layout: &Layout, requested: Option<String>, unset: bool) -> Result<
 ///
 /// The parent shell is the only process that can change its own environment,
 /// so this prints the line for the wrapper to `eval`.
-pub fn shell(layout: &Layout, requested: Option<String>, unset: bool) -> Result<(), String> {
-    let shell = crate::cmd::version_cmd::jenv_shell();
+pub fn shell(
+    layout: &Layout,
+    env: &Env,
+    requested: Option<String>,
+    unset: bool,
+) -> Result<(), String> {
+    let shell = env.shell();
 
     if unset {
         println!(
@@ -100,7 +113,7 @@ pub fn shell(layout: &Layout, requested: Option<String>, unset: bool) -> Result<
     }
 
     let Some(requested) = requested else {
-        return match std::env::var("JENV_VERSION").ok().filter(|v| !v.is_empty()) {
+        return match env.non_empty("JENV_VERSION") {
             Some(current) => {
                 println!("{current}");
                 Ok(())
@@ -157,12 +170,12 @@ fn validate_installed(layout: &Layout, name: &str) -> Result<(), String> {
 }
 
 /// `jenv options [--verbose]` — the extra arguments prepended to every run.
-pub fn options(layout: &Layout, verbose: bool) {
-    if let Some(from_env) = std::env::var("JENV_OPTIONS").ok().filter(|v| !v.is_empty()) {
-        return print_options(&from_env, "JENV_OPTIONS environment variable", verbose);
+pub fn options(layout: &Layout, env: &Env, verbose: bool) {
+    if let Some(from_env) = env.non_empty("JENV_OPTIONS") {
+        return print_options(from_env, "JENV_OPTIONS environment variable", verbose);
     }
 
-    let file = options_file(layout);
+    let file = options_file(layout, env);
     match version::read_version_file(&file) {
         Some(value) => {
             let origin = file.display().to_string();
@@ -173,11 +186,11 @@ pub fn options(layout: &Layout, verbose: bool) {
 }
 
 /// The resolved options, for `jenv exec` to prepend to the tool's argv.
-pub fn options_value(layout: &Layout) -> Option<String> {
-    if let Some(from_env) = std::env::var("JENV_OPTIONS").ok().filter(|v| !v.is_empty()) {
-        return Some(from_env);
+pub fn options_value(layout: &Layout, env: &Env) -> Option<String> {
+    if let Some(from_env) = env.non_empty("JENV_OPTIONS") {
+        return Some(from_env.to_string());
     }
-    version::read_version_file(&options_file(layout))
+    version::read_version_file(&options_file(layout, env))
 }
 
 fn print_options(value: &str, origin: &str, verbose: bool) {
@@ -194,12 +207,9 @@ fn print_options(value: &str, origin: &str, verbose: bool) {
 /// Both legs are made absolute first, because `Path::parent` on a bare `.`
 /// stops immediately: a relative `$JENV_DIR`, and a relative working
 /// directory, would each otherwise walk no further than themselves.
-fn options_file(layout: &Layout) -> PathBuf {
-    let from_env = std::env::var_os("JENV_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(crate::cmd::version_cmd::jenv_dir);
-    for start in [from_env, crate::layout::cwd()] {
-        let mut current = Some(crate::layout::absolute(&start));
+fn options_file(layout: &Layout, env: &Env) -> PathBuf {
+    for start in [env.jenv_dir(), env.cwd()] {
+        let mut current = Some(env.absolute(&start));
         while let Some(dir) = current {
             let candidate = dir.join(".java-options");
             if candidate.exists() {
@@ -246,9 +256,41 @@ mod tests {
         std::fs::create_dir_all(&nested).unwrap();
         std::fs::write(tmp.join(".java-options"), "-Xmx4g").unwrap();
 
+        // No subprocess and no `env_clear`: the walk is a function of the
+        // environment it is handed, so the test states only the part it needs.
+        let env = Env::bare(&nested).with("JENV_DIR", &nested);
         assert_eq!(
-            options_file(&Layout::with_root(&tmp)).parent(),
+            options_file(&Layout::with_root(&tmp), &env).parent(),
             Some(tmp.as_path())
+        );
+
+        // And `$JENV_DIR` is the first leg: a directory that has no
+        // `.java-options` of its own still climbs from there.
+        let other = tmp.join("elsewhere");
+        std::fs::create_dir_all(&other).unwrap();
+        let env = Env::bare(&other).with("JENV_DIR", &nested);
+        assert_eq!(
+            options_file(&Layout::with_root(&tmp), &env).parent(),
+            Some(tmp.as_path())
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// The two legs are the same shape as the version walk's, so the case that
+    /// broke there is worth pinning here too: a `$JENV_DIR` with nothing above
+    /// it must not stop the working directory's own file from being found.
+    #[test]
+    fn a_barren_jenv_dir_falls_through_to_the_working_directory() {
+        let tmp = std::env::temp_dir().join(format!("jenv-rs-opts2-{}", std::process::id()));
+        let bare = tmp.join("bare");
+        std::fs::create_dir_all(&bare).unwrap();
+        std::fs::write(tmp.join(".java-options"), "-Xmx2g").unwrap();
+
+        let env = Env::bare(&bare).with("JENV_DIR", &bare);
+        assert_eq!(
+            options_file(&Layout::with_root(&tmp), &env),
+            tmp.join(".java-options")
         );
 
         let _ = std::fs::remove_dir_all(&tmp);

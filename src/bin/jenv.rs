@@ -1,6 +1,7 @@
 use clap::Parser;
 use jenv::cli::{Cli, Command, Failure};
 use jenv::cmd;
+use jenv::env::Env;
 use jenv::layout::Layout;
 use jenv::process;
 use jenv::shim;
@@ -22,7 +23,10 @@ fn main() {
         shim::run(&tool);
     }
 
-    let layout = Layout::from_env();
+    // One snapshot of the environment, taken once, so a decision made in one
+    // part of a command cannot see a different environment than another part.
+    let env = Env::process();
+    let layout = Layout::from_env(&env);
 
     // The prompt hook that `jenv init` installs calls this. It is handled
     // before clap rather than declared as a subcommand because `hide = true`
@@ -32,7 +36,7 @@ fn main() {
     // `args_os`, not `args`: `args` panics on an argument that is not UTF-8,
     // which a shell will happily pass `jenv` when a path is not.
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new(EXPORT_HOOK)) {
-        return match cmd::export_hook(&layout) {
+        return match cmd::export_hook(&layout, &env) {
             Ok(()) => {}
             Err(message) => {
                 eprintln!("{message}");
@@ -55,7 +59,7 @@ fn main() {
         }
     };
 
-    match run(&layout, command) {
+    match run(&layout, &env, command) {
         Ok(()) => {}
         Err(failure) => {
             if !failure.message.is_empty() {
@@ -88,20 +92,20 @@ fn normalize_init_dash(argv: &[String]) -> Vec<String> {
 /// `jenv exec` and `jenv which` both resolve through the shim path, and both
 /// answer 127 — what a shell reports for a missing executable — rather than
 /// the generic 1. Everything else is an ordinary failure.
-fn run(layout: &Layout, command: Command) -> Result<(), Failure> {
+fn run(layout: &Layout, env: &Env, command: Command) -> Result<(), Failure> {
     match command {
-        Command::Which { command } => cmd::which(layout, &command).map_err(Failure::not_found),
-        Command::Exec { args } => match cmd::exec::exec(layout, &args) {
+        Command::Which { command } => cmd::which(layout, env, &command).map_err(Failure::not_found),
+        Command::Exec { args } => match cmd::exec::exec(layout, env, &args) {
             Err(message) if message.ends_with("command not found") => {
                 Err(Failure::not_found(message))
             }
             other => other.map_err(Failure::exit),
         },
-        other => dispatch(layout, other).map_err(Failure::exit),
+        other => dispatch(layout, env, other).map_err(Failure::exit),
     }
 }
 
-fn dispatch(layout: &Layout, command: Command) -> Result<(), String> {
+fn dispatch(layout: &Layout, env: &Env, command: Command) -> Result<(), String> {
     match command {
         Command::Add { target, force } => cmd::add(layout, &target, force),
         Command::Commands => {
@@ -113,11 +117,11 @@ fn dispatch(layout: &Layout, command: Command) -> Result<(), String> {
             cmd::complete(layout, &field);
             Ok(())
         }
-        Command::Doctor => cmd::doctor(layout),
+        Command::Doctor => cmd::doctor(layout, env),
         Command::Global { version, unset } => cmd::global(layout, version, unset),
-        Command::JavaHome => cmd::javahome(layout),
+        Command::JavaHome => cmd::javahome(layout, env),
         Command::Info => {
-            cmd::info(layout);
+            cmd::info(layout, env);
             Ok(())
         }
         Command::Init {
@@ -125,10 +129,10 @@ fn dispatch(layout: &Layout, command: Command) -> Result<(), String> {
             no_rehash,
             export,
             shell,
-        } => cmd::init(layout, print, no_rehash, !export, shell),
-        Command::Local { version, unset } => cmd::local(layout, version, unset),
+        } => cmd::init(layout, env, print, no_rehash, !export, shell),
+        Command::Local { version, unset } => cmd::local(layout, env, version, unset),
         Command::Options { verbose } => {
-            cmd::options(layout, verbose);
+            cmd::options(layout, env, verbose);
             Ok(())
         }
         Command::Rehash { force } => cmd::rehash(layout, force),
@@ -141,7 +145,7 @@ fn dispatch(layout: &Layout, command: Command) -> Result<(), String> {
             cmd::shims(layout, short);
             Ok(())
         }
-        Command::Shell { version, unset } => cmd::shell(layout, version, unset),
+        Command::Shell { version, unset } => cmd::shell(layout, env, version, unset),
         Command::Whence { command } => {
             for name in cmd::whence(layout, &command) {
                 println!("{name}");
@@ -149,6 +153,6 @@ fn dispatch(layout: &Layout, command: Command) -> Result<(), String> {
             Ok(())
         }
         // `Which` and `Exec` are handled by `run`, for their exit status.
-        other => cmd::dispatch(layout, other),
+        other => cmd::dispatch(layout, env, other),
     }
 }

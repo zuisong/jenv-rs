@@ -1,3 +1,4 @@
+use crate::env::Env;
 use crate::layout::Layout;
 use crate::link::Version;
 use crate::path;
@@ -10,14 +11,14 @@ use std::path::PathBuf;
 /// This deliberately ignores the selected version. Anything answering "what
 /// would the system JDK do" has to ask the system, and `resolve` would
 /// otherwise hand back the selected version's `bin/`.
-pub fn resolve_system(layout: &Layout, command: &str) -> Option<PathBuf> {
-    let dirs = path::path_without(&layout.shims_dir(), &path::path_dirs());
+pub fn resolve_system(layout: &Layout, env: &Env, command: &str) -> Option<PathBuf> {
+    let dirs = path::path_without(&layout.shims_dir(), &env.path_dirs());
     path::which_in_path(command, &dirs)
 }
 
 /// Is there a java reachable without going through jenv's shims?
-pub fn has_system_java(layout: &Layout) -> bool {
-    resolve_system(layout, "java").is_some()
+pub fn has_system_java(layout: &Layout, env: &Env) -> bool {
+    resolve_system(layout, env, "java").is_some()
 }
 
 /// Where `command` resolves for the active version.
@@ -31,8 +32,8 @@ pub fn has_system_java(layout: &Layout) -> bool {
 /// relative path that `is_executable` then judges against the working
 /// directory — made `jenv which` report success for a local file that would
 /// not run, and gave `jenv exec` the wrong exit status.
-pub fn resolve(layout: &Layout, command: &str) -> Option<PathBuf> {
-    let selection = version::select(layout).ok()?;
+pub fn resolve(layout: &Layout, env: &Env, command: &str) -> Option<PathBuf> {
+    let selection = version::select(layout, env).ok()?;
 
     if let Version::Installed { name, .. } = &selection.version {
         let bin = crate::link::registered_path(layout, name).join("bin");
@@ -44,12 +45,12 @@ pub fn resolve(layout: &Layout, command: &str) -> Option<PathBuf> {
         }
     }
 
-    let dirs = path::path_without(&layout.shims_dir(), &path::path_dirs());
+    let dirs = path::path_without(&layout.shims_dir(), &env.path_dirs());
     path::which_in_path(command, &dirs)
 }
 
-pub fn which(layout: &Layout, command: &str) -> Result<(), String> {
-    if let Some(path) = resolve(layout, command) {
+pub fn which(layout: &Layout, env: &Env, command: &str) -> Result<(), String> {
+    if let Some(path) = resolve(layout, env, command) {
         println!("{}", path.display());
         return Ok(());
     }

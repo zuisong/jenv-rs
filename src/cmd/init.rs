@@ -1,6 +1,6 @@
 use crate::cli::Shell;
+use crate::env::Env;
 use crate::layout::Layout;
-use crate::version_cmd::default_shell;
 use std::path::Path;
 
 /// `jenv init - [<shell>] [--no-export]`
@@ -10,14 +10,15 @@ use std::path::Path;
 /// itself.
 pub fn init(
     layout: &Layout,
+    env: &Env,
     print: bool,
     no_rehash: bool,
     export_home: bool,
     shell: Option<String>,
 ) -> Result<(), String> {
     let shell = shell
-        .or_else(|| std::env::var("JENV_SHELL").ok().filter(|s| !s.is_empty()))
-        .unwrap_or_else(default_shell);
+        .or_else(|| env.non_empty("JENV_SHELL").map(str::to_string))
+        .unwrap_or_else(|| env.default_shell());
 
     if !print {
         let profile = match shell.as_str() {

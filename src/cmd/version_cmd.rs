@@ -1,45 +1,45 @@
 use crate::cli::Command;
+use crate::env::Env;
 use crate::layout::Layout;
 use crate::link;
 
 use crate::version;
-use std::path::PathBuf;
 
 pub fn root(layout: &Layout) {
     println!("{}", layout.root.display());
 }
 
-pub fn version_file(layout: &Layout) {
-    println!("{}", version::active_version_file(layout).display());
+pub fn version_file(layout: &Layout, env: &Env) {
+    println!("{}", version::active_version_file(layout, env).display());
 }
 
-pub fn version_origin(layout: &Layout) {
-    match version::select(layout) {
+pub fn version_origin(layout: &Layout, env: &Env) {
+    match version::select(layout, env) {
         Ok(selection) => println!("{}", selection.origin),
         Err(e) => eprintln!("{e}"),
     }
 }
 
-pub fn version_name(layout: &Layout) -> Result<(), String> {
-    println!("{}", version::select(layout)?.version.name());
+pub fn version_name(layout: &Layout, env: &Env) -> Result<(), String> {
+    println!("{}", version::select(layout, env)?.version.name());
     Ok(())
 }
 
-pub fn version(layout: &Layout) -> Result<(), String> {
+pub fn version(layout: &Layout, env: &Env) -> Result<(), String> {
     // One line, like jenv: the prefix has its own command.
-    let selection = version::select(layout)?;
+    let selection = version::select(layout, env)?;
     println!("{} (set by {})", selection.version.name(), selection.origin);
     Ok(())
 }
 
-pub fn versions(layout: &Layout, bare: bool, verbose: bool) -> Result<(), String> {
+pub fn versions(layout: &Layout, env: &Env, bare: bool, verbose: bool) -> Result<(), String> {
     // One resolution, not two. `select` warns on stderr when it forgives a
     // `java-` prefix, so resolving twice printed that warning twice — and a
     // listing has no business resolving anything in `--bare` mode at all.
     let selected = if bare {
         None
     } else {
-        version::select(layout).ok()
+        version::select(layout, env).ok()
     };
     let current = selected
         .as_ref()
@@ -64,7 +64,7 @@ pub fn versions(layout: &Layout, bare: bool, verbose: bool) -> Result<(), String
         }
     };
 
-    if !bare && crate::cmd::which::has_system_java(layout) {
+    if !bare && crate::cmd::which::has_system_java(layout, env) {
         println!("{}", marker("system"));
     }
 
@@ -83,10 +83,10 @@ pub fn versions(layout: &Layout, bare: bool, verbose: bool) -> Result<(), String
     Ok(())
 }
 
-pub fn prefix(layout: &Layout, requested: Option<String>) -> Result<(), String> {
+pub fn prefix(layout: &Layout, env: &Env, requested: Option<String>) -> Result<(), String> {
     let name = match requested {
         Some(name) => name,
-        None => version::select(layout)?.version.name().to_string(),
+        None => version::select(layout, env)?.version.name().to_string(),
     };
 
     if name == "system" {
@@ -94,7 +94,7 @@ pub fn prefix(layout: &Layout, requested: Option<String>) -> Result<(), String> 
         // PATH, minus /bin. Asking `which::resolve` would consult the selected
         // version first and answer with that instead, which is the opposite of
         // what `system` means.
-        let java = crate::cmd::which::resolve_system(layout, "java")
+        let java = crate::cmd::which::resolve_system(layout, env, "java")
             .ok_or_else(|| "jenv: no system java on PATH".to_string())?;
         let Some(bin) = java.parent() else {
             return Err("jenv: could not derive a prefix from the system java".into());
@@ -114,42 +114,15 @@ pub fn prefix(layout: &Layout, requested: Option<String>) -> Result<(), String> 
     Ok(())
 }
 
-/// The directory a hook script should treat as the project root, matching
-/// jenv's own `$JENV_DIR`.
-pub fn jenv_dir() -> PathBuf {
-    std::env::var_os("JENV_DIR")
-        .map(PathBuf::from)
-        .unwrap_or(std::env::current_dir().unwrap_or_default())
-}
-
-pub fn jenv_shell() -> String {
-    std::env::var("JENV_SHELL").unwrap_or_else(|_| default_shell())
-}
-
-/// Best-effort detection of the shell that invoked us, used only to pick a
-/// hook-script dialect; an explicit `jenv init <shell>` always wins.
-pub fn default_shell() -> String {
-    #[cfg(windows)]
-    {
-        if std::env::var_os("PSModulePath").is_some() {
-            return "powershell".into();
-        }
-    }
-
-    std::env::var("SHELL")
-        .map(|s| s.rsplit('/').next().unwrap_or("bash").to_string())
-        .unwrap_or_else(|_| "bash".into())
-}
-
-pub fn dispatch(layout: &Layout, command: Command) -> Result<(), String> {
+pub fn dispatch(layout: &Layout, env: &Env, command: Command) -> Result<(), String> {
     match command {
         Command::Root => root(layout),
-        Command::Version => version(layout)?,
-        Command::VersionName => version_name(layout)?,
-        Command::VersionOrigin => version_origin(layout),
-        Command::VersionFile => version_file(layout),
-        Command::Versions { bare, verbose } => versions(layout, bare, verbose)?,
-        Command::Prefix { version } => prefix(layout, version)?,
+        Command::Version => version(layout, env)?,
+        Command::VersionName => version_name(layout, env)?,
+        Command::VersionOrigin => version_origin(layout, env),
+        Command::VersionFile => version_file(layout, env),
+        Command::Versions { bare, verbose } => versions(layout, env, bare, verbose)?,
+        Command::Prefix { version } => prefix(layout, env, version)?,
         _ => unreachable!("dispatch is only reached for the commands above"),
     }
     Ok(())

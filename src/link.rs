@@ -6,7 +6,7 @@
 //! home. Nothing writes that form any more, but registrations made by hand or
 //! by an earlier build still resolve through it.
 
-use crate::layout::{Layout, absolute};
+use crate::layout::Layout;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,7 +37,7 @@ impl Version {
 /// own: naming the file would put a file where `JAVA_HOME` needs a JDK home, so
 /// the home it records is the only path that can be published.
 pub fn registered_path(layout: &Layout, name: &str) -> PathBuf {
-    let entry = absolute(&layout.versions_dir().join(name));
+    let entry = layout.versions_dir().join(name);
     let is_text_link = std::fs::symlink_metadata(&entry).is_ok_and(|meta| meta.is_file());
     if is_text_link {
         return home_of(layout, name).unwrap_or(entry);
@@ -93,7 +93,7 @@ pub fn home_of(layout: &Layout, name: &str) -> Option<PathBuf> {
     }
     if entry.is_dir() {
         // A symlink on unix, or a real directory if someone copied one in.
-        return Some(absolute(&std::fs::canonicalize(&entry).unwrap_or(entry)));
+        return Some(std::fs::canonicalize(&entry).unwrap_or(entry));
     }
     // A text-file registration from the Windows form. Nothing writes this any
     // more, but one left behind by an older build still resolves.
@@ -103,7 +103,7 @@ pub fn home_of(layout: &Layout, name: &str) -> Option<PathBuf> {
         return None;
     }
     let target = PathBuf::from(target);
-    target.is_dir().then_some(absolute(&target))
+    target.is_dir().then_some(target)
 }
 
 /// Is there a registration under `name`, whether or not its target still

@@ -1,4 +1,5 @@
 use crate::cli::{Cli, Shell};
+use crate::env::Env;
 use crate::layout::Layout;
 use std::io::Write;
 
@@ -128,22 +129,22 @@ pub fn skill() {
     print!("{}", include_str!("../../skill/jenv-rs/SKILL.md"));
 }
 
-pub fn info(layout: &Layout) {
-    let version = match crate::version::select(layout) {
+pub fn info(layout: &Layout, env: &Env) {
+    let version = match crate::version::select(layout, env) {
         Ok(selection) => format!("{} (set by {})", selection.version.name(), selection.origin),
         Err(e) => e,
     };
 
     let entries: [(&str, String); 7] = [
         ("JENV_ROOT", layout.root.display().to_string()),
-        ("JENV_SHELL", crate::version_cmd::jenv_shell()),
+        ("JENV_SHELL", env.shell()),
         (
             "JENV_VERSION",
-            std::env::var("JENV_VERSION").unwrap_or_default(),
+            env.text("JENV_VERSION").unwrap_or_default().to_string(),
         ),
         (
             "JENV_DIR",
-            crate::version_cmd::jenv_dir().display().to_string(),
+            env.jenv_dir().display().to_string(),
         ),
         ("active version", version),
         ("versions", crate::link::list(layout).join(", ")),
@@ -168,7 +169,7 @@ pub fn info(layout: &Layout) {
 }
 
 /// `jenv doctor` — checks that would otherwise fail confusingly later.
-pub fn doctor(layout: &Layout) -> Result<(), String> {
+pub fn doctor(layout: &Layout, env: &Env) -> Result<(), String> {
     let mut problems = Vec::new();
 
     for dir in [
@@ -184,7 +185,7 @@ pub fn doctor(layout: &Layout) -> Result<(), String> {
         }
     }
 
-    if let Ok(selection) = crate::version::select(layout)
+    if let Ok(selection) = crate::version::select(layout, env)
         && let crate::link::Version::Installed { name, home } = &selection.version
         && !home.join("bin").join("java").exists()
         && !home.join("bin").join("java.exe").exists()

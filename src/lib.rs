@@ -1,6 +1,7 @@
 pub mod binary;
 pub mod cli;
 pub mod cmd;
+pub mod env;
 pub mod layout;
 pub mod link;
 pub mod path;

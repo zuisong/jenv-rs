@@ -10,6 +10,7 @@
 //! An unset or empty selection, and the literal name `system`, both mean "the
 //! java already on `PATH`".
 
+use crate::env::Env;
 use crate::layout::Layout;
 use crate::link::{self, Version};
 use std::path::{Path, PathBuf};
@@ -26,8 +27,8 @@ pub struct Selection {
 ///
 /// Both legs live here so that `jenv version-file` and `jenv version` cannot
 /// disagree about which file is in charge.
-pub fn active_version_file(layout: &Layout) -> PathBuf {
-    let (start, cwd) = start_dirs();
+pub fn active_version_file(layout: &Layout, env: &Env) -> PathBuf {
+    let (start, cwd) = start_dirs(env);
     local_version_file(&start)
         .or_else(|| local_version_file(&cwd))
         .unwrap_or_else(|| layout.global_version_file())
@@ -35,12 +36,9 @@ pub fn active_version_file(layout: &Layout) -> PathBuf {
 
 /// `$JENV_DIR` made absolute — a relative value would otherwise stop the walk
 /// at itself — and the working directory.
-fn start_dirs() -> (PathBuf, PathBuf) {
-    let cwd = crate::layout::cwd();
-    let start = match std::env::var_os("JENV_DIR") {
-        Some(dir) if !dir.is_empty() => crate::layout::absolute(Path::new(&dir)),
-        _ => cwd.clone(),
-    };
+fn start_dirs(env: &Env) -> (PathBuf, PathBuf) {
+    let cwd = env.cwd();
+    let start = env.absolute(&env.jenv_dir());
     (start, cwd)
 }
 
@@ -97,8 +95,8 @@ pub fn read_name_file(path: &Path) -> Option<String> {
 
 /// Resolve the active version. Returns `Err` with a jenv-compatible message
 /// when the configured version is not registered.
-pub fn select(layout: &Layout) -> Result<Selection, String> {
-    if let Ok(from_env) = std::env::var("JENV_VERSION") {
+pub fn select(layout: &Layout, env: &Env) -> Result<Selection, String> {
+    if let Some(from_env) = env.text("JENV_VERSION") {
         let name = from_env.trim().to_string();
         if name.is_empty() || name == "system" {
             return Ok(Selection {
@@ -109,7 +107,7 @@ pub fn select(layout: &Layout) -> Result<Selection, String> {
         return build(layout, &name, "JENV_VERSION environment variable");
     }
 
-    let file = active_version_file(layout);
+    let file = active_version_file(layout, env);
     let origin = file.display().to_string();
     let name = read_name_file(&file).unwrap_or_else(|| "system".into());
     if name == "system" {
@@ -188,6 +186,89 @@ mod tests {
         std::fs::write(tmp.join(".java-version"), "21").unwrap();
 
         assert_eq!(local_version_file(&nested), Some(tmp.join(".java-version")));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// The two-leg walk, as a decision rather than a subprocess. This is the
+    /// case that was broken in the shipped code and could not be reached by a
+    /// unit test before the environment became a parameter: `$JENV_DIR` and the
+    /// working directory are different, and the working directory still wins
+    /// when `$JENV_DIR` finds nothing.
+    #[test]
+    fn the_walk_prefers_jenv_dir_then_the_working_directory() {
+        let tmp = std::env::temp_dir().join(format!("jenv-rs-twolegs-{}", std::process::id()));
+        let project = tmp.join("project");
+        let elsewhere = tmp.join("elsewhere");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(project.join(".java-version"), "21").unwrap();
+
+        let layout = Layout::with_root(&tmp);
+
+        // Leg one: `$JENV_DIR` is inside the project.
+        let env = Env::bare(&elsewhere).with("JENV_DIR", &project);
+        assert_eq!(
+            active_version_file(&layout, &env),
+            project.join(".java-version")
+        );
+
+        // Leg two: `$JENV_DIR` points nowhere interesting, so the working
+        // directory's own file is next — it used to lose to the global file.
+        let env = Env::bare(&project).with("JENV_DIR", &elsewhere);
+        assert_eq!(
+            active_version_file(&layout, &env),
+            project.join(".java-version")
+        );
+
+        // And with neither leg finding one, the global file is the answer.
+        let env = Env::bare(&elsewhere).with("JENV_DIR", &elsewhere);
+        assert_eq!(
+            active_version_file(&layout, &env),
+            layout.global_version_file()
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A relative `$JENV_DIR` is relative to the working directory and must be
+    /// made absolute before the walk, or `Path::parent` stops at itself.
+    #[test]
+    fn a_relative_jenv_dir_is_resolved_before_the_walk() {
+        let tmp = std::env::temp_dir().join(format!("jenv-rs-rel-{}", std::process::id()));
+        let deep = tmp.join("a/b");
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(tmp.join(".java-version"), "21").unwrap();
+
+        let env = Env::bare(&deep).with("JENV_DIR", "..");
+        assert_eq!(
+            active_version_file(&Layout::with_root(&tmp), &env),
+            tmp.join(".java-version")
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// `$JENV_VERSION` outranks every file, and an empty one is how a shell
+    /// says "cleared" rather than "set to the empty version name".
+    #[test]
+    fn the_environment_variable_outranks_the_files() {
+        let tmp = std::env::temp_dir().join(format!("jenv-rs-envsel-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let layout = Layout::with_root(&tmp);
+
+        // The variable wins over the global file regardless of the file.
+        std::fs::write(tmp.join("version"), "21\n").unwrap();
+        let empty = Env::bare(&tmp).with("JENV_VERSION", "");
+        assert_eq!(
+            select(&layout, &empty).unwrap().version.name(),
+            "system",
+            "an empty JENV_VERSION must not be read as a version name"
+        );
+
+        // And a name it holds is attempted before any file is consulted.
+        let pinned = Env::bare(&tmp).with("JENV_VERSION", "99");
+        assert!(select(&layout, &pinned).unwrap_err().contains("not installed"));
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
