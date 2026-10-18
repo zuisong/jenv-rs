@@ -195,6 +195,16 @@ pub fn doctor(layout: &Layout) -> Result<(), String> {
         ));
     }
 
+    // `jenv remove` can delete these, and `jenv versions` lists them, but the
+    // reason a version suddenly fails to select is not otherwise visible.
+    for name in crate::link::list(layout) {
+        if crate::link::home_of(layout, &name).is_none() {
+            problems.push(format!(
+                "version `{name}` points at a directory that is gone (run `jenv remove {name}`)"
+            ));
+        }
+    }
+
     // Not setting JENV_ROOT is the normal case, not a problem: the default is
     // a perfectly good location. Only an override that points nowhere is.
 

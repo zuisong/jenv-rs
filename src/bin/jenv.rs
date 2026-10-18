@@ -28,7 +28,10 @@ fn main() {
     // before clap rather than declared as a subcommand because `hide = true`
     // is not honoured by every completion generator, and an internal entry
     // point should never turn up in a user's tab menu.
-    if std::env::args().nth(1).as_deref() == Some(EXPORT_HOOK) {
+    //
+    // `args_os`, not `args`: `args` panics on an argument that is not UTF-8,
+    // which a shell will happily pass `jenv` when a path is not.
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new(EXPORT_HOOK)) {
         return match cmd::export_hook(&layout) {
             Ok(()) => {}
             Err(message) => {
@@ -64,10 +67,16 @@ fn main() {
 }
 
 fn normalize_init_dash(argv: &[String]) -> Vec<String> {
+    // Only `jenv init ...` can mean "print", and the `-` may sit anywhere in
+    // its arguments: a check against `argv[index - 1]` missed
+    // `jenv init --no-export -`, which then printed setup instructions instead
+    // of shell code.
+    if argv.get(1).map(String::as_str) != Some("init") {
+        return argv.to_vec();
+    }
     argv.iter()
-        .enumerate()
-        .map(|(index, arg)| {
-            if index >= 2 && argv[index - 1] == "init" && arg == "-" {
+        .map(|arg| {
+            if arg == "-" {
                 "--print".to_string()
             } else {
                 arg.clone()

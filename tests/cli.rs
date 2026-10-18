@@ -1140,13 +1140,18 @@ fn exec_gives_the_tool_its_java_home_and_version_bin() {
     sandbox.run(&["local", "21"]).succeeds();
 
     let run = sandbox.run(&["exec", "java", "-version"]).succeeds();
+    // The registration path, which is what `jenv javahome` and the export hook
+    // publish: one JDK home has to be spelled the same way everywhere, or a
+    // value written into an IDE config disagrees with the running JVM.
     assert!(
         run.stdout
-            .contains(&format!("JAVA_HOME={}", sandbox.jdk.display()))
+            .contains(&format!("JAVA_HOME={}", sandbox.registered("21").display())),
+        "{}",
+        run.stdout
     );
     assert!(
         run.stdout
-            .contains(&format!("FIRST={}", sandbox.jdk.join("bin").display()))
+            .contains(&format!("FIRST={}", sandbox.registered("21").join("bin").display()))
     );
     assert!(run.stdout.contains("JENV_VERSION=21"));
 }
@@ -1786,4 +1791,205 @@ fn the_generated_script_tracks_new_subcommands() {
     let commands = sandbox.run(&["commands"]).succeeds();
     assert!(commands.lines().contains(&"doctor"));
     assert!(commands.lines().contains(&"completions"));
+}
+
+// ------------------------------------------------- fixes with no test before
+
+/// `$JENV_DIR` and the working directory are two legs of one walk: whichever
+/// finds a local file first wins, and the second leg must not be skipped just
+/// because the first found nothing. Both used to lose to the global file, and
+/// `version-file` disagreed with `version-name` about which file was in charge.
+#[test]
+fn a_local_file_is_found_from_jenv_dir_or_from_the_working_directory() {
+    let sandbox = Sandbox::new("jenv-dir-two-legs");
+    sandbox
+        .run(&["add", &sandbox.jdk.display().to_string()])
+        .succeeds();
+    std::fs::write(sandbox.project().join(".java-version"), "21\n").unwrap();
+
+    let elsewhere = sandbox.dir.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+
+    // Leg one: `$JENV_DIR` names a directory whose parent holds the file.
+    let deeper = sandbox.project().join("deeper");
+    std::fs::create_dir_all(&deeper).unwrap();
+    let out = sandbox.spawn_text_in(&deeper, &[("JENV_DIR", "..")], &["version-name"]);
+    assert_eq!(out.trim_end(), "21");
+
+    // Leg two: `$JENV_DIR` finds nothing, so the working directory is next.
+    let out = sandbox.spawn_text_in(
+        &sandbox.project(),
+        &[("JENV_DIR", elsewhere.to_str().unwrap())],
+        &["version-name"],
+    );
+    assert_eq!(out.trim_end(), "21");
+
+    // And the two commands agree about which file that was.
+    let file = sandbox.spawn_text_in(
+        &sandbox.project(),
+        &[("JENV_DIR", elsewhere.to_str().unwrap())],
+        &["version-file"],
+    );
+    assert_eq!(
+        file.trim_end(),
+        sandbox.project().join(".java-version").display().to_string()
+    );
+}
+
+/// `jenv local <uninstalled>` used to migrate — i.e. delete — a legacy
+/// `.jenv-version` before finding out the name was not installed, leaving the
+/// directory with no version file at all.
+#[test]
+fn local_refuses_an_uninstalled_version_without_deleting_the_legacy_file() {
+    let sandbox = Sandbox::new("local-keeps-legacy");
+    sandbox
+        .run(&["add", &sandbox.jdk.display().to_string()])
+        .succeeds();
+    let legacy = sandbox.project().join(".jenv-version");
+    std::fs::write(&legacy, "21\n").unwrap();
+
+    sandbox.run(&["local", "99"]).fails().contains("not installed");
+    assert_eq!(std::fs::read_to_string(&legacy).unwrap(), "21\n");
+    assert!(!sandbox.project().join(".java-version").exists());
+}
+
+/// A registration whose JDK was moved or deleted is exactly the one a user
+/// needs to delete, so `remove` keys on the registration itself rather than on
+/// the directory it used to point at.
+#[test]
+fn a_registration_with_a_missing_target_can_still_be_removed() {
+    let sandbox = Sandbox::new("remove-dangling");
+    sandbox
+        .run(&["add", &sandbox.jdk.display().to_string()])
+        .succeeds();
+    std::fs::remove_dir_all(&sandbox.jdk).unwrap();
+
+    let entry = sandbox.registered("21");
+    assert!(
+        std::fs::symlink_metadata(&entry).is_ok(),
+        "the link should still be there"
+    );
+
+    sandbox.run(&["remove", "21"]).succeeds();
+    assert!(std::fs::symlink_metadata(&entry).is_err());
+}
+
+/// `system` already names the java on `PATH`. Registering it would create an
+/// entry that `home_of` refuses to resolve, so it could never be listed,
+/// selected or removed — and `remove` would refuse it forever.
+#[test]
+fn add_refuses_the_reserved_name_system() {
+    let sandbox = Sandbox::new("add-system");
+    sandbox
+        .run(&["add", "system", &sandbox.jdk.display().to_string()])
+        .fails()
+        .contains("names the java on PATH");
+    assert!(std::fs::symlink_metadata(sandbox.registered("system")).is_err());
+}
+
+/// `version`/`global`/`default` are three names for one setting, so clearing
+/// only the first one just hands the answer to the next.
+#[test]
+fn global_unset_clears_every_legacy_file_name() {
+    let sandbox = Sandbox::new("global-unset-all");
+    sandbox
+        .run(&["add", &sandbox.jdk.display().to_string()])
+        .succeeds();
+    std::fs::write(sandbox.root.join("version"), "21\n").unwrap();
+    std::fs::write(sandbox.root.join("global"), "21.0.2\n").unwrap();
+    std::fs::write(sandbox.root.join("default"), "21.0\n").unwrap();
+
+    sandbox.run(&["global", "--unset"]).succeeds();
+    for name in ["version", "global", "default"] {
+        assert!(!sandbox.root.join(name).exists(), "{name} survived");
+    }
+    sandbox.run(&["global"]).fails();
+}
+
+/// `jenv which` answers what it would run. A name that resolves nowhere used to
+/// come back as the bare command, a relative path that `is_executable` then
+/// judged against the working directory — so a local file that is not on `PATH`
+/// was reported as found, and `exec` exited 1 instead of 127.
+#[test]
+fn which_does_not_mistake_a_local_file_for_a_resolved_command() {
+    let sandbox = Sandbox::new("which-local-file");
+    sandbox
+        .run(&["add", &sandbox.jdk.display().to_string()])
+        .succeeds();
+    sandbox.run(&["local", "21"]).succeeds();
+    write_script(&sandbox.project().join("localtool"), "echo local");
+
+    sandbox
+        .run(&["which", "localtool"])
+        .fails()
+        .contains("command not found");
+    let exec = sandbox.run(&["exec", "localtool"]).fails().contains("command not found");
+    assert!(
+        exec.stderr.contains("command not found"),
+        "{}",
+        exec.stderr
+    );
+}
+
+/// The shim hands its arguments straight to the tool, so an argument that is
+/// not UTF-8 has to arrive unchanged. `env::args` panicked on one, killing
+/// `java` before the JVM ever started.
+#[test]
+fn a_non_utf8_argument_reaches_the_tool_instead_of_panicking() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let sandbox = Sandbox::new("non-utf8-argv");
+    write_script(&sandbox.jdk.join("bin").join("java"), "echo \"got=$1\"");
+    sandbox
+        .run(&["add", &sandbox.jdk.display().to_string()])
+        .succeeds();
+    sandbox.run(&["local", "21"]).succeeds();
+
+    let mut command = std::process::Command::new(sandbox.shims().join(binary_name("java")));
+    command
+        .arg(OsString::from_vec(b"caf\xe9.txt".to_vec()))
+        .current_dir(sandbox.project())
+        .env_clear()
+        .env("PATH", sandbox.bin_on_path())
+        .env("JENV_ROOT", &sandbox.root)
+        .env("JENV_SHELL", "bash")
+        .env("JENV_DIR", sandbox.project());
+    let output = output_of(command).unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(stdout.contains("caf"), "{stdout}");
+}
+
+/// `jenv init --no-export -` is the same request as `jenv init - --no-export`,
+/// and the `-` used to be normalized only when it immediately followed `init`.
+#[test]
+fn the_init_dash_works_wherever_it_sits_in_the_arguments() {
+    let sandbox = Sandbox::new("init-dash-position");
+    let run = sandbox.run(&["init", "--no-export", "-", "bash"]).succeeds();
+    assert!(run.stdout.contains("export PATH="), "{}", run.stdout);
+    assert!(run.stdout.contains("unset JAVA_HOME"), "{}", run.stdout);
+}
+
+/// A registration whose JDK has moved is a real state a user lands in, and it
+/// used to be invisible: hidden from `versions`, refused by `remove`, and
+/// unreported by `doctor`. It is now listed, deletable, and diagnosed.
+#[test]
+fn a_registration_with_a_missing_target_is_visible_and_diagnosable() {
+    let sandbox = Sandbox::new("dangling-visible");
+    sandbox
+        .run(&["add", &sandbox.jdk.display().to_string()])
+        .succeeds();
+    std::fs::remove_dir_all(&sandbox.jdk).unwrap();
+
+    let listed = sandbox.run(&["versions", "--bare"]).succeeds();
+    assert!(listed.lines().contains(&"21"), "{:?}", listed.lines());
+
+    let doctor = sandbox.run(&["doctor"]).fails();
+    assert!(doctor.stderr.contains("points at a directory that is gone"), "{}", doctor.stderr);
+
+    sandbox.run(&["remove", "21"]).succeeds();
+    let after = sandbox.run(&["versions", "--bare"]).succeeds();
+    // `21.0` also contains "21", so compare whole lines.
+    assert!(!after.lines().contains(&"21"), "{:?}", after.lines());
 }

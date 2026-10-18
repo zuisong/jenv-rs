@@ -17,6 +17,12 @@ use std::path::{Path, PathBuf};
 pub fn add(layout: &Layout, target: &[String], force: bool) -> Result<(), String> {
     let (path, alias) = split_target(target)?;
 
+    // `system` already means "the java on PATH", so an alias under that name
+    // could never be listed, selected or removed — it would be born broken.
+    if alias.as_deref() == Some("system") {
+        return Err("jenv: `system' names the java on PATH, not a registration".into());
+    }
+
     let jdk = probe::probe(&path)?;
 
     // A caller-supplied name is otherwise taken on trust, but registering a

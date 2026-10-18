@@ -26,50 +26,48 @@ pub fn has_system_java(layout: &Layout) -> bool {
 /// the shims directory removed so that a shim cannot resolve itself. The
 /// version's own path is left unresolved: `jenv which` prints what it will
 /// invoke, and that is a path under `$JENV_ROOT/versions/`.
-pub fn resolve(layout: &Layout, command: &str) -> Result<PathBuf, String> {
-    let selection = version::select(layout)?;
+///
+/// `None` means "nowhere". Answering with the bare command name instead — a
+/// relative path that `is_executable` then judges against the working
+/// directory — made `jenv which` report success for a local file that would
+/// not run, and gave `jenv exec` the wrong exit status.
+pub fn resolve(layout: &Layout, command: &str) -> Option<PathBuf> {
+    let selection = version::select(layout).ok()?;
 
-    let mut found = match &selection.version {
-        Version::Installed { name, .. } => {
-            let bin = crate::link::registered_path(layout, name).join("bin");
-            path::executable_names(&bin.join(command))
-                .into_iter()
-                .find(|candidate| path::is_executable(candidate))
+    if let Version::Installed { name, .. } = &selection.version {
+        let bin = crate::link::registered_path(layout, name).join("bin");
+        if let Some(found) = path::executable_names(&bin.join(command))
+            .into_iter()
+            .find(|candidate| path::is_executable(candidate))
+        {
+            return Some(found);
         }
-        Version::System => None,
-    };
-
-    if found.is_none() {
-        let dirs = path::path_without(&layout.shims_dir(), &path::path_dirs());
-        found = path::which_in_path(command, &dirs);
     }
 
-    Ok(found.unwrap_or_else(|| PathBuf::from(command)))
+    let dirs = path::path_without(&layout.shims_dir(), &path::path_dirs());
+    path::which_in_path(command, &dirs)
 }
 
 pub fn which(layout: &Layout, command: &str) -> Result<(), String> {
-    match resolve(layout, command) {
-        Ok(path) if path::is_executable(&path) => {
-            println!("{}", path.display());
-            Ok(())
-        }
-        _ => {
-            // The hint is what makes this actionable, so it goes in the
-            // message rather than straight to stderr: `main` is what prints.
-            let mut message = format!("jenv: {command}: command not found");
-            let elsewhere = whence(layout, command);
-            if !elsewhere.is_empty() {
-                message.push_str("\n\n");
-                message.push_str(&format!(
-                    "The `{command}' command exists in these Java versions:"
-                ));
-                for name in elsewhere {
-                    message.push_str(&format!("\n   {name}"));
-                }
-            }
-            Err(message)
+    if let Some(path) = resolve(layout, command) {
+        println!("{}", path.display());
+        return Ok(());
+    }
+
+    // The hint is what makes this actionable, so it goes in the message
+    // rather than straight to stderr: `main` is what prints.
+    let mut message = format!("jenv: {command}: command not found");
+    let elsewhere = whence(layout, command);
+    if !elsewhere.is_empty() {
+        message.push_str("\n\n");
+        message.push_str(&format!(
+            "The `{command}' command exists in these Java versions:"
+        ));
+        for name in elsewhere {
+            message.push_str(&format!("\n   {name}"));
         }
     }
+    Err(message)
 }
 
 pub fn whence(layout: &Layout, command: &str) -> Vec<String> {

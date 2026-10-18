@@ -7,8 +7,6 @@
 //! to save disk space — it is what makes it impossible for a shim and the CLI
 //! that manages it to be different builds.
 
-use std::path::{Path, PathBuf};
-
 /// The command this executable stands for, taken from the name it was invoked
 /// as, or `None` when it is being run as the CLI.
 ///
@@ -38,17 +36,13 @@ pub fn tool_name() -> Option<String> {
 ///
 /// Nothing is interpreted on the way, which is the whole point — the shell
 /// implementation spent a dozen bash interpreters per `java` invocation
-/// before this.
+/// before this. Nor is anything converted: the arguments are taken as
+/// `OsString` so a filename that is not UTF-8 reaches the tool unchanged
+/// instead of panicking this process.
 pub fn run(tool: &str) -> ! {
-    let mut argv = Vec::with_capacity(std::env::args().count());
-    argv.push(tool.to_string());
-    argv.extend(std::env::args().skip(1));
-
-    if let Some(dir) = jar_directory(tool) {
-        // SAFETY: nothing else is running; the shim has not started a
-        // thread, and `exec` below replaces the process outright.
-        unsafe { std::env::set_var("JENV_DIR", dir) };
-    }
+    let mut argv = Vec::with_capacity(std::env::args_os().count());
+    argv.push(std::ffi::OsString::from(tool));
+    argv.extend(std::env::args_os().skip(1));
 
     let layout = crate::layout::Layout::from_env();
     if let Err(message) = crate::cmd::exec::exec(&layout, &argv) {
@@ -59,28 +53,4 @@ pub fn run(tool: &str) -> ! {
     std::process::exit(1);
 }
 
-/// `java -jar path/to/app.jar` runs with a working directory the user chose,
-/// not one under `$JAVA_HOME`. jenv exposes that directory as `$JENV_DIR` so
-/// project-local configuration can be found.
-///
-/// Stops at the first argument that is not an existing path, and never past
-/// the first flag, so `java -version` does not pick up the current directory.
-fn jar_directory(tool: &str) -> Option<PathBuf> {
-    if tool != "java" {
-        return None;
-    }
-    for arg in std::env::args_os().skip(1) {
-        let text = arg.to_string_lossy();
-        if text.starts_with('-') {
-            return None;
-        }
-        let path = Path::new(&arg);
-        if text.contains('/') || text.contains('\\') {
-            if path.is_file() {
-                return path.parent().map(Path::to_path_buf);
-            }
-            return None;
-        }
-    }
-    None
-}
+

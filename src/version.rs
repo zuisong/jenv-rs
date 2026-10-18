@@ -4,7 +4,7 @@
 //!
 //! 1. `JENV_VERSION` in the environment
 //! 2. `.java-version` (or legacy `.jenv-version`) found by walking up from
-//!    `$JENV_DIR`, then from the working directory if that is different
+//!    `$JENV_DIR`, then from the working directory if that finds nothing
 //! 3. the global version file
 //!
 //! An unset or empty selection, and the literal name `system`, both mean "the
@@ -21,21 +21,42 @@ pub struct Selection {
     pub origin: String,
 }
 
-/// The file that pins the version, following `jenv version-file` exactly,
-/// including the `global`/`default` legacy names. Returns a path that may not
-/// exist, which callers must tolerate.
-pub fn version_file(layout: &Layout, start_dir: &Path) -> PathBuf {
-    for dir in walk_up(start_dir) {
-        let java_version = dir.join(".java-version");
-        if java_version.exists() {
-            return java_version;
-        }
-        let jenv_version = dir.join(".jenv-version");
-        if jenv_version.exists() {
-            return jenv_version;
+/// The file that actually selects the version: `$JENV_DIR` first, then the
+/// working directory, then the global file.
+///
+/// Both legs live here so that `jenv version-file` and `jenv version` cannot
+/// disagree about which file is in charge.
+pub fn active_version_file(layout: &Layout) -> PathBuf {
+    let (start, cwd) = start_dirs();
+    local_version_file(&start)
+        .or_else(|| local_version_file(&cwd))
+        .unwrap_or_else(|| layout.global_version_file())
+}
+
+/// `$JENV_DIR` made absolute — a relative value would otherwise stop the walk
+/// at itself — and the working directory.
+fn start_dirs() -> (PathBuf, PathBuf) {
+    let cwd = crate::layout::cwd();
+    let start = match std::env::var_os("JENV_DIR") {
+        Some(dir) if !dir.is_empty() => crate::layout::absolute(Path::new(&dir)),
+        _ => cwd.clone(),
+    };
+    (start, cwd)
+}
+
+/// The nearest `.java-version`, or legacy `.jenv-version`, at or above `start`.
+/// Both names are checked in each directory as the walk climbs, so a nearer
+/// legacy file still beats a further `.java-version`.
+fn local_version_file(start: &Path) -> Option<PathBuf> {
+    for dir in walk_up(start) {
+        for name in [".java-version", ".jenv-version"] {
+            let candidate = dir.join(name);
+            if candidate.exists() {
+                return Some(candidate);
+            }
         }
     }
-    layout.global_version_file()
+    None
 }
 
 fn walk_up(start: &Path) -> impl Iterator<Item = PathBuf> + '_ {
@@ -88,21 +109,7 @@ pub fn select(layout: &Layout) -> Result<Selection, String> {
         return build(layout, &name, "JENV_VERSION environment variable");
     }
 
-    let start = std::env::var_os("JENV_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(crate::layout::cwd);
-    let cwd = crate::layout::cwd();
-
-    let mut file = version_file(layout, &start);
-    if start != cwd {
-        // `$JENV_DIR` wins, but a `.java-version` above the *working*
-        // directory is the next place worth looking before going global.
-        let from_cwd = version_file(layout, &cwd);
-        if !from_cwd.exists() {
-            file = from_cwd;
-        }
-    }
-
+    let file = active_version_file(layout);
     let origin = file.display().to_string();
     let name = read_name_file(&file).unwrap_or_else(|| "system".into());
     if name == "system" {
@@ -165,8 +172,10 @@ mod tests {
         std::fs::write(dir.join(".java-version"), "21\n").unwrap();
         std::fs::write(dir.join(".jenv-version"), "17").unwrap();
 
-        let layout = Layout::with_root(&tmp);
-        assert_eq!(version_file(&layout, &dir), dir.join(".java-version"));
+        assert_eq!(
+            local_version_file(&dir),
+            Some(dir.join(".java-version"))
+        );
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -178,8 +187,7 @@ mod tests {
         std::fs::create_dir_all(&nested).unwrap();
         std::fs::write(tmp.join(".java-version"), "21").unwrap();
 
-        let layout = Layout::with_root(&tmp);
-        assert_eq!(version_file(&layout, &nested), tmp.join(".java-version"));
+        assert_eq!(local_version_file(&nested), Some(tmp.join(".java-version")));
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

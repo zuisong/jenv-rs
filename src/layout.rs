@@ -23,6 +23,9 @@ impl Layout {
         Self { root }
     }
 
+    /// A layout rooted somewhere other than `$JENV_ROOT`, for tests that need
+    /// a directory of their own.
+    #[cfg(test)]
     pub fn with_root(root: impl Into<PathBuf>) -> Self {
         Self { root: root.into() }
     }

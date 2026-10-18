@@ -85,7 +85,9 @@ pub enum Command {
             trailing_var_arg = true,
             allow_hyphen_values = true
         )]
-        args: Vec<String>,
+        /// `OsString`, not `String`: the arguments are passed through to the
+        /// tool, and a path that is not UTF-8 is still a path.
+        args: Vec<std::ffi::OsString>,
     },
 
     /// Set or show the version used outside any project

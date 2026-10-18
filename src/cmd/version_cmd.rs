@@ -10,7 +10,7 @@ pub fn root(layout: &Layout) {
 }
 
 pub fn version_file(layout: &Layout) {
-    println!("{}", version::version_file(layout, &jenv_dir()).display());
+    println!("{}", version::active_version_file(layout).display());
 }
 
 pub fn version_origin(layout: &Layout) {
@@ -163,7 +163,6 @@ mod tests {
         let sandbox = std::env::temp_dir().join(format!("jenv-rs-gv-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&sandbox);
         let layout = Layout::with_root(&sandbox);
-        let from = sandbox.join("project");
 
         // With nothing configured the chain still names the file it would create.
         assert_eq!(layout.global_version_file(), sandbox.join("version"));
@@ -178,14 +177,6 @@ mod tests {
 
         std::fs::write(sandbox.join("version"), "21.0.2").unwrap();
         assert_eq!(layout.global_version_file(), sandbox.join("version"));
-
-        // A local file anywhere above the start directory beats all of them.
-        std::fs::create_dir_all(from.join("a/b")).unwrap();
-        std::fs::write(from.join(".java-version"), "21").unwrap();
-        assert_eq!(
-            version::version_file(&layout, &from.join("a/b")),
-            from.join(".java-version")
-        );
 
         let _ = std::fs::remove_dir_all(&sandbox);
     }

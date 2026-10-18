@@ -24,16 +24,6 @@ impl Version {
             Version::System => "system",
         }
     }
-
-    /// The directory to put at the front of `PATH` and to export as
-    /// `JAVA_HOME`. `None` for the system version, which is whatever the
-    /// ambient environment already points at.
-    pub fn prefix(&self) -> Option<&Path> {
-        match self {
-            Version::Installed { home, .. } => Some(home),
-            Version::System => None,
-        }
-    }
 }
 
 /// The path a version is registered at: `$JENV_ROOT/versions/<name>`.
@@ -42,8 +32,17 @@ impl Version {
 /// what `JAVA_HOME` is set to. It is deliberately *not* resolved to the JDK's
 /// real location: a path pinned into an IDE configuration or a CI job should
 /// keep naming the same thing after the JDK is re-registered somewhere else.
+///
+/// The exception is a text-file registration, which has no directory of its
+/// own: naming the file would put a file where `JAVA_HOME` needs a JDK home, so
+/// the home it records is the only path that can be published.
 pub fn registered_path(layout: &Layout, name: &str) -> PathBuf {
-    absolute(&layout.versions_dir().join(name))
+    let entry = absolute(&layout.versions_dir().join(name));
+    let is_text_link = std::fs::symlink_metadata(&entry).is_ok_and(|meta| meta.is_file());
+    if is_text_link {
+        return home_of(layout, name).unwrap_or(entry);
+    }
+    entry
 }
 
 /// Reject anything that is not a plain entry name inside `versions/`.
@@ -96,7 +95,8 @@ pub fn home_of(layout: &Layout, name: &str) -> Option<PathBuf> {
         // A symlink on unix, or a real directory if someone copied one in.
         return Some(absolute(&std::fs::canonicalize(&entry).unwrap_or(entry)));
     }
-    // Windows text-file link.
+    // A text-file registration from the Windows form. Nothing writes this any
+    // more, but one left behind by an older build still resolves.
     let contents = std::fs::read_to_string(&entry).ok()?;
     let target = contents.trim();
     if target.is_empty() {
@@ -106,13 +106,22 @@ pub fn home_of(layout: &Layout, name: &str) -> Option<PathBuf> {
     target.is_dir().then_some(absolute(&target))
 }
 
+/// Is there a registration under `name`, whether or not its target still
+/// exists? A symlink whose JDK was moved or deleted still has to be removable.
+pub fn registered(layout: &Layout, name: &str) -> bool {
+    valid_name(name) && std::fs::symlink_metadata(layout.versions_dir().join(name)).is_ok()
+}
+
 pub fn exists(layout: &Layout, name: &str) -> bool {
     name == "system" || home_of(layout, name).is_some()
 }
 
 /// Point `versions/<name>` at `home`, replacing whatever was there.
 pub fn register(layout: &Layout, name: &str, home: &Path) -> std::io::Result<()> {
-    if !valid_name(name) {
+    // `system` names the ambient java rather than a registration, so an entry
+    // under that name could never be listed, selected or removed: it would be
+    // born broken.
+    if !valid_name(name) || name == "system" {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!("`{name}` is not a valid version name"),
@@ -152,12 +161,16 @@ fn remove(entry: &Path) -> std::io::Result<()> {
 
 /// Every registered version, in the order `jenv versions` prints them:
 /// alphabetical, with `system` first when the ambient environment has a java.
+///
+/// A registration whose JDK has gone is listed rather than hidden: it is still
+/// an entry under `versions/`, `jenv remove` can delete it, and a listing that
+/// omits it leaves a user with no way to find out what is wrong.
 pub fn list(layout: &Layout) -> Vec<String> {
     let mut names = Vec::new();
     if let Ok(entries) = std::fs::read_dir(layout.versions_dir()) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if home_of(layout, &name).is_some() {
+            if registered(layout, &name) {
                 names.push(name);
             }
         }
@@ -188,6 +201,9 @@ mod tests {
         assert_eq!(home_of(&layout, "21"), Some(jdk.clone()));
         assert!(exists(&layout, "21"));
         assert_eq!(list(&layout), vec!["21".to_string()]);
+        // And every command that publishes a prefix has to publish the JDK
+        // home, not the text file that names it.
+        assert_eq!(registered_path(&layout, "21"), jdk);
 
         std::fs::remove_dir_all(&tmp).unwrap();
     }

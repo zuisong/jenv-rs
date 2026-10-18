@@ -8,11 +8,20 @@ pub fn global(layout: &Layout, requested: Option<String>, unset: bool) -> Result
     let file = layout.global_version_file();
 
     if unset {
-        return match std::fs::remove_file(&file) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(format!("jenv: {e}")),
-        };
+        // `global` and `default` are legacy names for the same setting, so
+        // clearing one of them would just resurrect the next in the chain.
+        for file in [
+            layout.root.join("version"),
+            layout.root.join("global"),
+            layout.root.join("default"),
+        ] {
+            match std::fs::remove_file(&file) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(format!("jenv: {e}")),
+            }
+        }
+        return Ok(());
     }
 
     let Some(requested) = requested else {
@@ -25,7 +34,8 @@ pub fn global(layout: &Layout, requested: Option<String>, unset: bool) -> Result
         };
     };
 
-    write_version_file(layout, &file, &requested)
+    validate_installed(layout, &requested)?;
+    write_version_file(&file, &requested)
 }
 
 /// `jenv local [version]`
@@ -51,6 +61,10 @@ pub fn local(layout: &Layout, requested: Option<String>, unset: bool) -> Result<
         return Err("jenv: no local version configured for this directory".into());
     };
 
+    // Checked before anything is deleted: a rejected name used to take the
+    // legacy file with it and leave the directory with no version at all.
+    validate_installed(layout, &requested)?;
+
     // A `.jenv-version` in the way gets migrated rather than silently
     // shadowed, so a project that predates `.java-version` keeps working.
     if version::read_name_file(&legacy).is_some() {
@@ -59,7 +73,7 @@ pub fn local(layout: &Layout, requested: Option<String>, unset: bool) -> Result<
         eprintln!("       local version specification to `.java-version' file");
     }
 
-    write_version_file(layout, &java_version, &requested)
+    write_version_file(&java_version, &requested)
 }
 
 /// `jenv shell [version]`
@@ -74,6 +88,11 @@ pub fn shell(layout: &Layout, requested: Option<String>, unset: bool) -> Result<
             "{}",
             match shell.as_str() {
                 "fish" => "set -e JENV_VERSION; or true",
+                // PowerShell has neither `unset` nor `export`; both would
+                // raise CommandNotFoundException on every shell start.
+                "powershell" => {
+                    "Remove-Item Env:JENV_VERSION -ErrorAction SilentlyContinue"
+                }
                 _ => "unset JENV_VERSION",
             }
         );
@@ -92,9 +111,7 @@ pub fn shell(layout: &Layout, requested: Option<String>, unset: bool) -> Result<
 
     // Refuse to pin a shell session to a version that is not there, which is
     // what makes `jenv shell` fail loudly instead of at the next `java`.
-    if !link::exists(layout, &requested) {
-        return Err(format!("jenv: version `{requested}' not installed"));
-    }
+    validate_installed(layout, &requested)?;
 
     println!(
         "{}",
@@ -118,19 +135,25 @@ pub fn shell(layout: &Layout, requested: Option<String>, unset: bool) -> Result<
     Ok(())
 }
 
-fn write_version_file(layout: &Layout, file: &Path, requested: &str) -> Result<(), String> {
-    // Check the name is real, but print nothing: `jenv local 21` is quiet on
-    // success, and the prefix it validates against is not what the user asked
-    // to see. `link::exists`, not `home_of`: `system` is a version you select
-    // rather than one that is registered, and jenv treats it as first-class —
-    // `jenv global system` and `jenv shell system` have to agree.
-    if !link::exists(layout, requested) {
-        return Err(format!("jenv: version `{requested}' not installed"));
-    }
+fn write_version_file(file: &Path, requested: &str) -> Result<(), String> {
     if let Some(parent) = file.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("jenv: {e}"))?;
     }
     std::fs::write(file, format!("{requested}\n")).map_err(|e| format!("jenv: {e}"))
+}
+
+/// A version a file may name: one that is registered, or `system`.
+///
+/// `link::exists`, not `home_of`: `system` is a version you select rather than
+/// one that is registered, and jenv treats it as first-class —
+/// `jenv global system` and `jenv shell system` have to agree. Nothing is
+/// printed on success, because `jenv local 21` is quiet and the prefix it
+/// validates against is not what the user asked to see.
+fn validate_installed(layout: &Layout, name: &str) -> Result<(), String> {
+    if link::exists(layout, name) {
+        return Ok(());
+    }
+    Err(format!("jenv: version `{name}' not installed"))
 }
 
 /// `jenv options [--verbose]` — the extra arguments prepended to every run.
@@ -192,7 +215,10 @@ fn options_file(layout: &Layout) -> PathBuf {
 pub fn remove(layout: &Layout, versions: &[String]) -> Result<(), String> {
     let mut removed = false;
     for name in versions {
-        if link::home_of(layout, name).is_some() {
+        // `registered`, not `home_of`: a registration whose JDK was moved away
+        // is precisely the one a user needs to delete, and it used to be
+        // neither listed nor removable.
+        if link::registered(layout, name) {
             link::unregister(layout, name).map_err(|e| format!("jenv: {e}"))?;
             println!("JDK {name} removed");
             removed = true;
@@ -200,7 +226,7 @@ pub fn remove(layout: &Layout, versions: &[String]) -> Result<(), String> {
             // Not an error when it is one of several names, but never a
             // silent success either: a script that removed nothing has to be
             // able to tell.
-            println!("{name} is not a managed version of Java ");
+            println!("{name} is not a managed version of Java");
         }
     }
     if !removed && !versions.is_empty() {

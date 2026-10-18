@@ -35,11 +35,6 @@ pub fn which_in_path(name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
     None
 }
 
-/// The first `PATH` entry that provides `name`, searching the ambient `PATH`.
-pub fn which(name: &str) -> Option<PathBuf> {
-    which_in_path(name, &path_dirs())
-}
-
 /// The names `stem` can carry on this platform. Unix runs the bare name.
 /// Windows runs the `.exe` and only the `.exe`: probing it directly is faster
 /// than consulting `PATHEXT`, and immune to a `PATHEXT` the caller mangled.
