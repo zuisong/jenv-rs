@@ -1149,10 +1149,10 @@ fn exec_gives_the_tool_its_java_home_and_version_bin() {
         "{}",
         run.stdout
     );
-    assert!(
-        run.stdout
-            .contains(&format!("FIRST={}", sandbox.registered("21").join("bin").display()))
-    );
+    assert!(run.stdout.contains(&format!(
+        "FIRST={}",
+        sandbox.registered("21").join("bin").display()
+    )));
     assert!(run.stdout.contains("JENV_VERSION=21"));
 }
 
@@ -1832,7 +1832,11 @@ fn a_local_file_is_found_from_jenv_dir_or_from_the_working_directory() {
     );
     assert_eq!(
         file.trim_end(),
-        sandbox.project().join(".java-version").display().to_string()
+        sandbox
+            .project()
+            .join(".java-version")
+            .display()
+            .to_string()
     );
 }
 
@@ -1848,7 +1852,10 @@ fn local_refuses_an_uninstalled_version_without_deleting_the_legacy_file() {
     let legacy = sandbox.project().join(".jenv-version");
     std::fs::write(&legacy, "21\n").unwrap();
 
-    sandbox.run(&["local", "99"]).fails().contains("not installed");
+    sandbox
+        .run(&["local", "99"])
+        .fails()
+        .contains("not installed");
     assert_eq!(std::fs::read_to_string(&legacy).unwrap(), "21\n");
     assert!(!sandbox.project().join(".java-version").exists());
 }
@@ -1923,12 +1930,11 @@ fn which_does_not_mistake_a_local_file_for_a_resolved_command() {
         .run(&["which", "localtool"])
         .fails()
         .contains("command not found");
-    let exec = sandbox.run(&["exec", "localtool"]).fails().contains("command not found");
-    assert!(
-        exec.stderr.contains("command not found"),
-        "{}",
-        exec.stderr
-    );
+    let exec = sandbox
+        .run(&["exec", "localtool"])
+        .fails()
+        .contains("command not found");
+    assert!(exec.stderr.contains("command not found"), "{}", exec.stderr);
 }
 
 /// The shim hands its arguments straight to the tool, so an argument that is
@@ -1957,7 +1963,11 @@ fn a_non_utf8_argument_reaches_the_tool_instead_of_panicking() {
         .env("JENV_DIR", sandbox.project());
     let output = output_of(command).unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(stdout.contains("caf"), "{stdout}");
 }
 
@@ -1966,7 +1976,9 @@ fn a_non_utf8_argument_reaches_the_tool_instead_of_panicking() {
 #[test]
 fn the_init_dash_works_wherever_it_sits_in_the_arguments() {
     let sandbox = Sandbox::new("init-dash-position");
-    let run = sandbox.run(&["init", "--no-export", "-", "bash"]).succeeds();
+    let run = sandbox
+        .run(&["init", "--no-export", "-", "bash"])
+        .succeeds();
     assert!(run.stdout.contains("export PATH="), "{}", run.stdout);
     assert!(run.stdout.contains("unset JAVA_HOME"), "{}", run.stdout);
 }
@@ -1986,7 +1998,11 @@ fn a_registration_with_a_missing_target_is_visible_and_diagnosable() {
     assert!(listed.lines().contains(&"21"), "{:?}", listed.lines());
 
     let doctor = sandbox.run(&["doctor"]).fails();
-    assert!(doctor.stderr.contains("points at a directory that is gone"), "{}", doctor.stderr);
+    assert!(
+        doctor.stderr.contains("points at a directory that is gone"),
+        "{}",
+        doctor.stderr
+    );
 
     sandbox.run(&["remove", "21"]).succeeds();
     let after = sandbox.run(&["versions", "--bare"]).succeeds();
@@ -2010,12 +2026,19 @@ fn versions_resolves_the_active_version_once() {
 
     let run = sandbox.run(&["versions"]).succeeds();
     let warnings = run.stderr.matches("warning: ignoring extraneous").count();
-    assert_eq!(warnings, 1, "expected one warning, got {warnings}:\n{}", run.stderr);
+    assert_eq!(
+        warnings, 1,
+        "expected one warning, got {warnings}:\n{}",
+        run.stderr
+    );
     // And it still names the version it resolved to, not the spelling it read.
     assert!(run.stdout.contains("* 21"), "{}", run.stdout);
 
     // `--bare` is for scripts: no marker, and nothing to resolve.
     let bare = sandbox.run(&["versions", "--bare"]).succeeds();
-    assert_eq!(bare.stderr.matches("warning: ignoring extraneous").count(), 0);
+    assert_eq!(
+        bare.stderr.matches("warning: ignoring extraneous").count(),
+        0
+    );
     assert!(!bare.stdout.contains('*'), "{}", bare.stdout);
 }

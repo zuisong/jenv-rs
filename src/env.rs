@@ -206,7 +206,10 @@ mod tests {
     #[test]
     fn a_relative_path_is_made_absolute_against_the_working_directory() {
         let env = Env::bare("/tmp/base");
-        assert_eq!(env.absolute(Path::new("sub/./x")), PathBuf::from("/tmp/base/sub/x"));
+        assert_eq!(
+            env.absolute(Path::new("sub/./x")),
+            PathBuf::from("/tmp/base/sub/x")
+        );
         assert_eq!(env.absolute(Path::new("/abs/../y")), PathBuf::from("/y"));
     }
 }

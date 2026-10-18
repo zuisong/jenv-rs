@@ -53,5 +53,3 @@ pub fn run(tool: &str) -> ! {
     // `exec` replaces the process; this is only reached if it refused to.
     std::process::exit(1);
 }
-
-

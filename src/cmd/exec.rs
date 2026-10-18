@@ -1,8 +1,8 @@
 use crate::env::Env;
 use crate::layout::Layout;
 use crate::link::Version;
-use crate::version;
 use crate::process;
+use crate::version;
 use std::collections::HashMap;
 use std::ffi::OsString;
 
@@ -28,10 +28,7 @@ pub fn exec(layout: &Layout, env: &Env, argv: &[OsString]) -> Result<(), String>
     let mut vars: HashMap<&str, String> = HashMap::new();
     vars.insert("JENV_VERSION", selection.version.name().to_string());
     vars.insert("JENV_COMMAND", command.clone());
-    vars.insert(
-        "JENV_DIR",
-        env.jenv_dir().display().to_string(),
-    );
+    vars.insert("JENV_DIR", env.jenv_dir().display().to_string());
 
     if let Version::Installed { name, .. } = &selection.version {
         // The registration path, not the JDK's real home: it is what

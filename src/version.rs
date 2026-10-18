@@ -170,10 +170,7 @@ mod tests {
         std::fs::write(dir.join(".java-version"), "21\n").unwrap();
         std::fs::write(dir.join(".jenv-version"), "17").unwrap();
 
-        assert_eq!(
-            local_version_file(&dir),
-            Some(dir.join(".java-version"))
-        );
+        assert_eq!(local_version_file(&dir), Some(dir.join(".java-version")));
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -268,7 +265,11 @@ mod tests {
 
         // And a name it holds is attempted before any file is consulted.
         let pinned = Env::bare(&tmp).with("JENV_VERSION", "99");
-        assert!(select(&layout, &pinned).unwrap_err().contains("not installed"));
+        assert!(
+            select(&layout, &pinned)
+                .unwrap_err()
+                .contains("not installed")
+        );
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

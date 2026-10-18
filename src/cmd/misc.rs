@@ -142,10 +142,7 @@ pub fn info(layout: &Layout, env: &Env) {
             "JENV_VERSION",
             env.text("JENV_VERSION").unwrap_or_default().to_string(),
         ),
-        (
-            "JENV_DIR",
-            env.jenv_dir().display().to_string(),
-        ),
+        ("JENV_DIR", env.jenv_dir().display().to_string()),
         ("active version", version),
         ("versions", crate::link::list(layout).join(", ")),
         (
