@@ -235,7 +235,7 @@ mod tests {
     /// made absolute before the walk, or `Path::parent` stops at itself.
     #[test]
     fn a_relative_jenv_dir_is_resolved_before_the_walk() {
-        let tmp = std::env::temp_dir().join(format!("jenv-rs-rel-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("jenv-rs-relwalk-{}", std::process::id()));
         let deep = tmp.join("a/b");
         std::fs::create_dir_all(&deep).unwrap();
         std::fs::write(tmp.join(".java-version"), "21").unwrap();
